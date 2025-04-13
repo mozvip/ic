@@ -1,0 +1,6 @@
+{
+    "files.associations": {
+        "comic_viewer.h": "c",
+        "stdbool.h": "c"
+    }
+}
