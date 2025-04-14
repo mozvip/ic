@@ -1,6 +1,10 @@
 {
     "files.associations": {
         "comic_viewer.h": "c",
-        "stdbool.h": "c"
+        "stdbool.h": "c",
+        "random": "c",
+        "chrono": "c",
+        "typeindex": "c",
+        "typeinfo": "c"
     }
 }

@@ -10,9 +10,10 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
-#include <SDL2/SDL.h>
-#include <SDL2/SDL_image.h>
-#include <SDL2/SDL_ttf.h>
+#include <math.h>
+#include <SDL3/SDL.h>
+#include <SDL3_image/SDL_image.h>
+#include <SDL3_ttf/SDL_ttf.h>
 
 #include "comic_viewer.h"
 #include "comic_loaders.h"
@@ -70,32 +71,23 @@ static void update_progress(float progress, const char *message);
 
 bool comic_viewer_init(int monitor_index) {
     // Force SDL to use Wayland backend
-    SDL_SetHint(SDL_HINT_VIDEODRIVER, "wayland");
+    SDL_SetHint("SDL_VIDEODRIVER", "wayland");
     
     // Enable HiDPI scaling
-    SDL_SetHint(SDL_HINT_VIDEO_HIGHDPI_DISABLED, "0");
+    SDL_SetHint("SDL_WINDOW_ALLOW_HIGHDPI", "1");
     
     // Set best quality for scaling operations
-    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "2");  // 0=nearest, 1=linear, 2=anisotropic
+    SDL_SetHint("SDL_RENDER_SCALE_QUALITY", "2");  // 0=nearest, 1=linear, 2=anisotropic
     
     // Initialize SDL
-    if (SDL_Init(SDL_INIT_VIDEO) < 0) {
+    if (!SDL_Init(SDL_INIT_VIDEO)) {
         fprintf(stderr, "SDL could not initialize! SDL_Error: %s\n", SDL_GetError());
         return false;
     }
-
-    // Initialize SDL_image
-    int img_flags = IMG_INIT_JPG | IMG_INIT_PNG | IMG_INIT_WEBP;
-    if (!(IMG_Init(img_flags) & img_flags)) {
-        fprintf(stderr, "SDL_image could not initialize! SDL_image Error: %s\n", IMG_GetError());
-        SDL_Quit();
-        return false;
-    }
-    
+   
     // Initialize SDL_ttf
-    if (TTF_Init() < 0) {
-        fprintf(stderr, "SDL_ttf could not initialize! SDL_ttf Error: %s\n", TTF_GetError());
-        IMG_Quit();
+    if (!TTF_Init()) {
+        fprintf(stderr, "SDL_ttf could not initialize! SDL_ttf Error: %s\n", SDL_GetError());
         SDL_Quit();
         return false;
     }
@@ -105,7 +97,6 @@ bool comic_viewer_init(int monitor_index) {
     if (!select_monitor(monitor_index, &x, &y)) {
         fprintf(stderr, "Failed to select monitor %d\n", monitor_index);
         TTF_Quit();
-        IMG_Quit();
         SDL_Quit();
         return false;
     }
@@ -114,27 +105,40 @@ bool comic_viewer_init(int monitor_index) {
     viewer.window_width = 1024;
     viewer.window_height = 768;
     viewer.monitor_index = monitor_index;
-    viewer.window = SDL_CreateWindow("IC - Image Comic Viewer",
-                                    x, y,
-                                    viewer.window_width, viewer.window_height,
-                                    SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
+    
+    SDL_WindowFlags window_flags = SDL_WINDOW_RESIZABLE;
+    viewer.window = SDL_CreateWindow("IC - Image Comic Viewer", 
+                                    viewer.window_width, 
+                                    viewer.window_height,
+                                    window_flags);
+                                    
     if (viewer.window == NULL) {
         fprintf(stderr, "Window could not be created! SDL_Error: %s\n", SDL_GetError());
         TTF_Quit();
-        IMG_Quit();
         SDL_Quit();
         return false;
     }
 
+    // Position the window on the selected monitor
+    SDL_SetWindowPosition(viewer.window, x, y);
+
+    // get names of all available renderers
+    int num_renderers = SDL_GetNumRenderDrivers();
+    for (int i = 0; i < num_renderers; i++) {
+        char *render_driver = SDL_GetRenderDriver(i);
+        printf("Renderer %d: %s\n", i, render_driver);
+    }
+    // Set the renderer to use the best available driver
+    // FIXME
+    char *renderer_name = SDL_GetHint("SDL_RENDER_DRIVER");
+
     // Create renderer with enhanced quality settings
-    viewer.renderer = SDL_CreateRenderer(viewer.window, -1, 
-                                        SDL_RENDERER_ACCELERATED | 
-                                        SDL_RENDERER_PRESENTVSYNC);
+    viewer.renderer = SDL_CreateRenderer(viewer.window, renderer_name);
+    
     if (viewer.renderer == NULL) {
         fprintf(stderr, "Renderer could not be created! SDL_Error: %s\n", SDL_GetError());
         SDL_DestroyWindow(viewer.window);
         TTF_Quit();
-        IMG_Quit();
         SDL_Quit();
         return false;
     }
@@ -146,17 +150,19 @@ bool comic_viewer_init(int monitor_index) {
     }
     
     // Get the actual window size and drawable size for HiDPI scaling
-    int display_w, display_h;
+    SDL_GetWindowSizeInPixels(viewer.window, &viewer.drawable_width, &viewer.drawable_height);
     SDL_GetWindowSize(viewer.window, &viewer.window_width, &viewer.window_height);
     
     // Set logical size to handle HiDPI scaling automatically
-    if (display_w > viewer.window_width || display_h > viewer.window_height) {
-        SDL_RenderSetLogicalSize(viewer.renderer, viewer.window_width, viewer.window_height);
+    if (viewer.drawable_width > viewer.window_width || viewer.drawable_height > viewer.window_height) {
+        SDL_SetRenderLogicalPresentation(viewer.renderer, 
+                                         viewer.window_width, 
+                                         viewer.window_height,
+                                         SDL_LOGICAL_PRESENTATION_LETTERBOX);
         printf("HiDPI detected: Window size: %dx%d, Drawable size: %dx%d\n", 
-               viewer.window_width, viewer.window_height, display_w, display_h);
+               viewer.window_width, viewer.window_height, 
+               viewer.drawable_width, viewer.drawable_height);
     }
-
-    SDL_GL_GetDrawableSize(viewer.window, &viewer.drawable_width, &viewer.drawable_height);
 
     // Load font - try to load a system font if available
     viewer.font = TTF_OpenFont("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 20);
@@ -169,7 +175,7 @@ bool comic_viewer_init(int monitor_index) {
         viewer.font = TTF_OpenFont("/usr/share/fonts/dejavu/DejaVuSans.ttf", 20);
     }
     if (!viewer.font) {
-        fprintf(stderr, "Warning: Failed to load font: %s\n", TTF_GetError());
+        fprintf(stderr, "Warning: Failed to load font: %s\n", SDL_GetError());
         // Continue without a font - we'll handle the null case when rendering
     }
 
@@ -285,7 +291,6 @@ void comic_viewer_cleanup(void) {
     }
     
     free_resources();
-    IMG_Quit();
     SDL_Quit();
 }
 
@@ -307,13 +312,12 @@ static bool load_image(int index) {
             // Load the image using our high-quality scaling function
             create_high_quality_texture(viewer.renderer, &viewer.images[index]);
             if (!viewer.images[index].texture) {
-                fprintf(stderr, "Failed to load image %s: %s\n", image_path, IMG_GetError());
+                fprintf(stderr, "Failed to load image %s: %s\n", image_path, SDL_GetError());
                 return false;
             }
             
             // Store original dimensions
-            SDL_QueryTexture(viewer.images[index].texture, NULL, NULL, 
-                            &viewer.images[index].width, &viewer.images[index].height);
+            SDL_GetTextureSize(viewer.images[index].texture, &viewer.images[index].width, &viewer.images[index].height);
             
             return true;
         }
@@ -323,13 +327,12 @@ static bool load_image(int index) {
         create_high_quality_texture(viewer.renderer, &viewer.images[index]);
         if (!viewer.images[index].texture) {
             fprintf(stderr, "Failed to load image %s: %s\n", 
-                    viewer.images[index].path, IMG_GetError());
+                    viewer.images[index].path, SDL_GetError());
             return false;
         }
         
         // Store original dimensions
-        SDL_QueryTexture(viewer.images[index].texture, NULL, NULL, 
-                        &viewer.images[index].width, &viewer.images[index].height);
+        SDL_GetTextureSize(viewer.images[index].texture, &viewer.images[index].width, &viewer.images[index].height);
         
         return true;
     }
@@ -356,11 +359,11 @@ static void handle_events(void) {
     
     while (SDL_PollEvent(&event)) {
         switch (event.type) {
-            case SDL_QUIT:
+            case SDL_EVENT_QUIT:
                 viewer.running = false;
                 break;
                 
-            case SDL_MOUSEWHEEL:
+            case SDL_EVENT_MOUSE_WHEEL:
                 // Mouse wheel for page navigation
                 if (event.wheel.y > 0) {  // Scroll up
                     previous_page();
@@ -369,8 +372,8 @@ static void handle_events(void) {
                 }
                 break;
                 
-            case SDL_KEYDOWN:
-                switch (event.key.keysym.sym) {
+            case SDL_EVENT_KEY_DOWN:
+                switch (event.key.key) {
                     case SDLK_ESCAPE:
                         viewer.running = false;
                         break;
@@ -423,7 +426,7 @@ static void handle_events(void) {
                         }
                         break;
 
-                    case SDLK_f:
+                    case SDLK_F:
                         // Toggle fullscreen
                         toggle_fullscreen();
                         break;
@@ -435,18 +438,25 @@ static void handle_events(void) {
                 }
                 break;
                 
-            case SDL_WINDOWEVENT:
-                if (event.window.event == SDL_WINDOWEVENT_RESIZED || 
-                    event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
-                    // Update window dimensions
-                    viewer.window_width = event.window.data1;
-                    viewer.window_height = event.window.data2;
-                    
-                    SDL_RenderSetLogicalSize(viewer.renderer, viewer.window_width, viewer.window_height);
-                } else if (event.window.event == SDL_WINDOWEVENT_EXPOSED) {
-                    // Window needs to be redrawn
-                    render_current_image();
+            case SDL_EVENT_WINDOW_RESIZED:
+                // Update window dimensions
+                viewer.window_width = event.window.data1;
+                viewer.window_height = event.window.data2;
+                
+                // Update logical presentation for HiDPI
+                SDL_GetWindowSizeInPixels(viewer.window, &viewer.drawable_width, &viewer.drawable_height);
+                
+                if (viewer.drawable_width != viewer.window_width || viewer.drawable_height != viewer.window_height) {
+                    SDL_SetRenderLogicalPresentation(viewer.renderer, 
+                                                    viewer.window_width, 
+                                                    viewer.window_height,
+                                                    SDL_LOGICAL_PRESENTATION_LETTERBOX);
                 }
+                break;
+                
+            case SDL_EVENT_WINDOW_EXPOSED:
+                // Window needs to be redrawn
+                render_current_image();
                 break;
         }
     }
@@ -480,7 +490,6 @@ void next_page()
         viewer.current_image++;
         load_image(viewer.current_image);
     }
-
 }
 
 void previous_page()
@@ -522,14 +531,13 @@ static void render_current_image(void) {
 
         // Ensure both textures are loaded
         if (!current_img->texture || !next_img->texture) {
-            viewer.page_turning_enabled = false; // Stop animation if textures are missing
+            viewer.page_turning_in_progress = false; // Stop animation if textures are missing
             return;
         }
 
         // Calculate scaling to fit in the window while maintaining aspect ratio
-
-        float scale_x = viewer.drawable_width / current_img->width;
-        float scale_y = viewer.drawable_height / current_img->height;
+        float scale_x = (float)viewer.drawable_width / current_img->width;
+        float scale_y = (float)viewer.drawable_height / current_img->height;
         float scale = (scale_x < scale_y) ? scale_x : scale_y;
 
         int scaled_width = (int)(current_img->width * scale);
@@ -539,27 +547,36 @@ static void render_current_image(void) {
         int y = (viewer.window_height - scaled_height) / 2;
 
         // Render the current page
-        SDL_Rect current_rect = {x, y, scaled_width, scaled_height};
-        SDL_RenderCopy(viewer.renderer, current_img->texture, NULL, &current_rect);
+        SDL_FRect current_rect = {(float)x, (float)y, (float)scaled_width, (float)scaled_height};
+        SDL_RenderTexture(viewer.renderer, current_img->texture, NULL, &current_rect);
 
-        // Render the next page with a clipping effect
-        SDL_Rect next_rect = {x, y, scaled_width, scaled_height};
-        if (viewer.direction == 1) {
-            // TODO
-        } else {
-            // TODO
+        // Render the next page with a page turn effect
+        SDL_FRect next_rect = {(float)x, (float)y, (float)scaled_width, (float)scaled_height};
+        
+        if (viewer.direction == 1) { // Forward page turn
+            // In SDL3, we need to create a custom implementation for the page turn effect
+            // using SDL_RenderGeometry or simpler methods
+            
+            // For now, implement a simple horizontal slide effect
+            float slide_position = (float)scaled_width * (1.0f - viewer.page_turn_progress);
+            next_rect.x = x + slide_position;
+            
+            // Render the next image with current progress
+            SDL_RenderTexture(viewer.renderer, next_img->texture, NULL, &next_rect);
+        } else { // Backward page turn
+            // Similar implementation for backward page turn
+            float slide_position = -((float)scaled_width * (1.0f - viewer.page_turn_progress));
+            next_rect.x = x + slide_position;
+            
+            // Render the previous image with current progress
+            SDL_RenderTexture(viewer.renderer, next_img->texture, NULL, &next_rect);
         }
-        int clip_width = (int)(scaled_width * viewer.page_turn_progress);
-        SDL_Rect clip_rect = {0, 0, clip_width, scaled_height};
-        SDL_RenderSetClipRect(viewer.renderer, &clip_rect);
-        SDL_RenderCopy(viewer.renderer, next_img->texture, NULL, &next_rect);
-        SDL_RenderSetClipRect(viewer.renderer, NULL);
-
+        
         // Update the animation progress
         viewer.page_turn_progress += 0.05f; // Adjust speed as needed
         if (viewer.page_turn_progress >= 1.0f) {
             // Animation complete
-            viewer.page_turning_enabled = false;
+            viewer.page_turning_in_progress = false;
             viewer.current_image = viewer.target_image;
         }
     } else {
@@ -585,20 +602,22 @@ static void render_current_image(void) {
             
             // Draw left side background with the dominant color from the left edge
             SDL_SetRenderDrawColor(viewer.renderer, left_color.r, left_color.g, left_color.b, 255);
-            SDL_Rect left_rect = {0, 0, x, viewer.window_height};
+            SDL_FRect left_rect = {0, 0, (float)x, (float)viewer.window_height};
             SDL_RenderFillRect(viewer.renderer, &left_rect);
             
             // Draw right side background with the dominant color from the right edge
             SDL_SetRenderDrawColor(viewer.renderer, right_color.r, right_color.g, right_color.b, 255);
-            SDL_Rect right_rect = {x + scaled_width, 0, viewer.window_width - x - scaled_width, viewer.window_height};
+            SDL_FRect right_rect = {(float)(x + scaled_width), 0, 
+                                   (float)(viewer.window_width - x - scaled_width), 
+                                   (float)viewer.window_height};
             SDL_RenderFillRect(viewer.renderer, &right_rect);
             
             // Draw the image with high-quality rendering
-            SDL_Rect dest_rect = {x, y, scaled_width, scaled_height};
+            SDL_FRect dest_rect = {(float)x, (float)y, (float)scaled_width, (float)scaled_height};
             
             // Use high-quality rendering with a specific blend mode for better results
             SDL_SetTextureBlendMode(img->texture, SDL_BLENDMODE_NONE);
-            SDL_RenderCopy(viewer.renderer, img->texture, NULL, &dest_rect);
+            SDL_RenderTexture(viewer.renderer, img->texture, NULL, &dest_rect);
         }
     }
     
@@ -626,32 +645,50 @@ void display_info()
     SDL_Color fgColor = {255, 255, 255, 255}; // White
     
     // Draw semi-transparent background circle
-    SDL_SetRenderDrawBlendMode(viewer.renderer, SDL_BLENDMODE_BLEND);
     SDL_SetRenderDrawColor(viewer.renderer, bgColor.r, bgColor.g, bgColor.b, bgColor.a);
     
     // Draw a filled circle using triangles like a pie chart
     int segments = 36; // Number of segments for a full circle
     float angle_step = 2.0f * M_PI / segments;
     
+    // For SDL3, we use SDL_Vertex with SDL_RenderGeometry
     // Background circle
+    SDL_Vertex *vertices = malloc(segments * 3 * sizeof(SDL_Vertex));
+    if (!vertices) return;
+    
     for (int i = 0; i < segments; i++) {
         float angle1 = i * angle_step;
         float angle2 = (i + 1) * angle_step;
         
-        int x1 = centerX + (int)(cos(angle1) * radius);
-        int y1 = centerY + (int)(sin(angle1) * radius);
-        int x2 = centerX + (int)(cos(angle2) * radius);
-        int y2 = centerY + (int)(sin(angle2) * radius);
+        float x1 = centerX + cosf(angle1) * radius;
+        float y1 = centerY + sinf(angle1) * radius;
+        float x2 = centerX + cosf(angle2) * radius;
+        float y2 = centerY + sinf(angle2) * radius;
         
-        // Draw a triangle from center to two points on the circle
-        SDL_Vertex vertices[3] = {
-            {{(float)centerX, (float)centerY}, {bgColor.r, bgColor.g, bgColor.b, bgColor.a}, {0, 0}},
-            {{(float)x1, (float)y1}, {bgColor.r, bgColor.g, bgColor.b, bgColor.a}, {0, 0}},
-            {{(float)x2, (float)y2}, {bgColor.r, bgColor.g, bgColor.b, bgColor.a}, {0, 0}}
-        };
+        // Set up the three vertices for this triangle
+        vertices[i*3].position.x = (float)centerX;
+        vertices[i*3].position.y = (float)centerY;
+        vertices[i*3].color.r = bgColor.r;
+        vertices[i*3].color.g = bgColor.g;
+        vertices[i*3].color.b = bgColor.b;
+        vertices[i*3].color.a = bgColor.a;
         
-        SDL_RenderGeometry(viewer.renderer, NULL, vertices, 3, NULL, 0);
+        vertices[i*3+1].position.x = x1;
+        vertices[i*3+1].position.y = y1;
+        vertices[i*3+1].color.r = bgColor.r;
+        vertices[i*3+1].color.g = bgColor.g;
+        vertices[i*3+1].color.b = bgColor.b;
+        vertices[i*3+1].color.a = bgColor.a;
+        
+        vertices[i*3+2].position.x = x2;
+        vertices[i*3+2].position.y = y2;
+        vertices[i*3+2].color.r = bgColor.r;
+        vertices[i*3+2].color.g = bgColor.g;
+        vertices[i*3+2].color.b = bgColor.b;
+        vertices[i*3+2].color.a = bgColor.a;
     }
+    
+    SDL_RenderGeometry(viewer.renderer, NULL, vertices, segments * 3, NULL, 0);
     
     // Draw progress fill
     SDL_SetRenderDrawColor(viewer.renderer, fgColor.r, fgColor.g, fgColor.b, fgColor.a);
@@ -663,34 +700,71 @@ void display_info()
     // Starting angle: -90 degrees (top of the circle)
     float startAngle = -M_PI / 2.0f;
     
+    // Reuse the vertices array for the filled segments
     for (int i = 0; i < filledSegments; i++) {
         float angle1 = startAngle + (i * angle_step);
         float angle2 = startAngle + ((i + 1) * angle_step);
         
-        int x1 = centerX + (int)(cos(angle1) * radius);
-        int y1 = centerY + (int)(sin(angle1) * radius);
-        int x2 = centerX + (int)(cos(angle2) * radius);
-        int y2 = centerY + (int)(sin(angle2) * radius);
+        float x1 = centerX + cosf(angle1) * radius;
+        float y1 = centerY + sinf(angle1) * radius;
+        float x2 = centerX + cosf(angle2) * radius;
+        float y2 = centerY + sinf(angle2) * radius;
         
-        // Draw a triangle from center to two points on the circle
-        SDL_Vertex vertices[3] = {
-            {{(float)centerX, (float)centerY}, {fgColor.r, fgColor.g, fgColor.b, fgColor.a}, {0, 0}},
-            {{(float)x1, (float)y1}, {fgColor.r, fgColor.g, fgColor.b, fgColor.a}, {0, 0}},
-            {{(float)x2, (float)y2}, {fgColor.r, fgColor.g, fgColor.b, fgColor.a}, {0, 0}}
-        };
+        // Set up the three vertices for this triangle
+        vertices[i*3].position.x = (float)centerX;
+        vertices[i*3].position.y = (float)centerY;
+        vertices[i*3].color.r = fgColor.r;
+        vertices[i*3].color.g = fgColor.g;
+        vertices[i*3].color.b = fgColor.b;
+        vertices[i*3].color.a = fgColor.a;
         
-        SDL_RenderGeometry(viewer.renderer, NULL, vertices, 3, NULL, 0);
+        vertices[i*3+1].position.x = x1;
+        vertices[i*3+1].position.y = y1;
+        vertices[i*3+1].color.r = fgColor.r;
+        vertices[i*3+1].color.g = fgColor.g;
+        vertices[i*3+1].color.b = fgColor.b;
+        vertices[i*3+1].color.a = fgColor.a;
+        
+        vertices[i*3+2].position.x = x2;
+        vertices[i*3+2].position.y = y2;
+        vertices[i*3+2].color.r = fgColor.r;
+        vertices[i*3+2].color.g = fgColor.g;
+        vertices[i*3+2].color.b = fgColor.b;
+        vertices[i*3+2].color.a = fgColor.a;
     }
     
-    // Reset blend mode
-    SDL_SetRenderDrawBlendMode(viewer.renderer, SDL_BLENDMODE_NONE);
+    if (filledSegments > 0) {
+        SDL_RenderGeometry(viewer.renderer, NULL, vertices, filledSegments * 3, NULL, 0);
+    }
+    
+    free(vertices);
+    
+    // Display page number and total
+    char info_text[32];
+    snprintf(info_text, sizeof(info_text), "%d / %d", viewer.current_image + 1, viewer.image_count);
+    
+    SDL_Texture *text_texture = render_text(info_text, fgColor);
+    if (text_texture) {
+        float text_width, text_height;
+        SDL_GetTextureSize(text_texture, &text_width, &text_height);
+        
+        SDL_FRect text_rect = {
+            (float)(centerX - text_width / 2),
+            (float)(centerY + radius + 10),
+            (float)text_width,
+            (float)text_height
+        };
+        
+        SDL_RenderTexture(viewer.renderer, text_texture, NULL, &text_rect);
+        SDL_DestroyTexture(text_texture);
+    }
 }
 
 static void free_resources(void) {
     // Free image resources
     for (int i = 0; i < viewer.image_count; i++) {
         if (viewer.images[i].surface) {
-            SDL_FreeSurface(viewer.images[i].surface);
+            SDL_DestroySurface(viewer.images[i].surface);
             viewer.images[i].surface = NULL;
         }
         if (viewer.images[i].texture) {
@@ -727,10 +801,10 @@ static void toggle_fullscreen(void) {
     viewer.fullscreen = !viewer.fullscreen;
     
     if (viewer.fullscreen) {
-        // Use borderless fullscreen for better Wayland compatibility
-        SDL_SetWindowFullscreen(viewer.window, SDL_WINDOW_FULLSCREEN_DESKTOP);
+        // In SDL3, fullscreen is set with SDL_SetWindowFullscreen(window, SDL_TRUE)
+        SDL_SetWindowFullscreen(viewer.window, true);
     } else {
-        SDL_SetWindowFullscreen(viewer.window, 0);
+        SDL_SetWindowFullscreen(viewer.window, false);
         
         // When exiting fullscreen, ensure window goes back to the correct monitor
         if (viewer.monitor_index >= 0) {
@@ -750,14 +824,18 @@ static void toggle_fullscreen(void) {
         }
     }
     
-    SDL_GL_GetDrawableSize(viewer.window, &viewer.drawable_width, &viewer.drawable_height);
+    // Update drawable size after toggling fullscreen
+    SDL_GetWindowSizeInPixels(viewer.window, &viewer.drawable_width, &viewer.drawable_height);
     SDL_GetWindowSize(viewer.window, &viewer.window_width, &viewer.window_height);
 
     // Re-apply the logical size after toggling fullscreen to maintain HiDPI settings
     if (viewer.renderer) {       
         // Only set logical size if there's a difference (HiDPI)
         if (viewer.drawable_width != viewer.window_width || viewer.drawable_height != viewer.window_height) {
-            SDL_RenderSetLogicalSize(viewer.renderer, viewer.window_width, viewer.window_height);
+            SDL_SetRenderLogicalPresentation(viewer.renderer, 
+                                            viewer.window_width, 
+                                            viewer.window_height,
+                                            SDL_LOGICAL_PRESENTATION_LETTERBOX);
         }
     }
 }
@@ -781,11 +859,14 @@ static SDL_Color get_dominant_color(SDL_Surface *surface, int x, int y, int widt
     int dominant_index = 0;
     
     // Get pixel format
-    SDL_PixelFormat *fmt = surface->format;
-    int bpp = surface->format->BytesPerPixel;
+    SDL_PixelFormatDetails *fmt = SDL_GetPixelFormatDetails(surface->format);
+    int bpp = fmt->bytes_per_pixel;
     
     // Scan the specified region with bounds checking
     int sample_step = 2; // Sample every 2nd pixel to speed up analysis
+    
+    uint8_t *pixels = (uint8_t *)surface->pixels;
+    int pitch = surface->pitch;
     
     for (int j = y; j < y + height; j += sample_step) {
         for (int i = x; i < x + width; i += sample_step) {
@@ -793,13 +874,13 @@ static SDL_Color get_dominant_color(SDL_Surface *surface, int x, int y, int widt
             if (i < 0 || i >= surface->w || j < 0 || j >= surface->h) continue;
             
             // Extract the pixel
-            Uint8 *p = (Uint8 *)surface->pixels + j * surface->pitch + i * bpp;
-            Uint32 pixel = 0;
+            uint8_t *p = pixels + j * pitch + i * bpp;
+            uint32_t pixel = 0;
             
             // Be very careful with pixel access
             switch (bpp) {
                 case 1: pixel = *p; break;
-                case 2: pixel = *(Uint16 *)p; break;
+                case 2: pixel = *(uint16_t *)p; break;
                 case 3: 
                     #if SDL_BYTEORDER == SDL_BIG_ENDIAN
                         pixel = p[0] << 16 | p[1] << 8 | p[2]; 
@@ -807,13 +888,13 @@ static SDL_Color get_dominant_color(SDL_Surface *surface, int x, int y, int widt
                         pixel = p[0] | p[1] << 8 | p[2] << 16; 
                     #endif
                     break;
-                case 4: pixel = *(Uint32 *)p; break;
+                case 4: pixel = *(uint32_t *)p; break;
                 default: continue; // Skip unknown formats
             }
             
             // Convert to RGB
-            Uint8 r, g, b;
-            SDL_GetRGB(pixel, fmt, &r, &g, &b);
+            uint8_t r, g, b, a;
+            SDL_GetRGBA(pixel, fmt, SDL_GetSurfacePalette(surface), &r, &g, &b, &a);
             
             // Skip almost black or almost white pixels
             if ((r < 15 && g < 15 && b < 15) || (r > 240 && g > 240 && b > 240)) {
@@ -866,7 +947,7 @@ static void analyze_image_edges(int index, SDL_Color *left_color, SDL_Color *rig
     // since we can't easily access pixel data from textures
     SDL_Surface *surface = viewer.images[index].surface;
     if (!surface) {
-        fprintf(stderr, "Failed to load image for analysis: %s\n", IMG_GetError());
+        fprintf(stderr, "Failed to load image for analysis: %s\n", SDL_GetError());
         return;
     }
     
@@ -878,32 +959,25 @@ static void analyze_image_edges(int index, SDL_Color *left_color, SDL_Color *rig
     int edge_width = width * 0.08;
     if (edge_width < 1) edge_width = 1;
 
-    // Lock surface for pixel access
-    if (SDL_LockSurface(surface) == 0) {
-        // Get dominant color from left edge
-        *left_color = get_dominant_color(surface, 0, 0, edge_width, height);
-        
-        // Get dominant color from right edge
-        *right_color = get_dominant_color(surface, width - edge_width, 0, edge_width, height);
-
-        SDL_UnlockSurface(surface);
-    } else {
-        fprintf(stderr, "Failed to lock surface for pixel access: %s\n", SDL_GetError());
-    }
+    // Get dominant color from left edge
+    *left_color = get_dominant_color(surface, 0, 0, edge_width, height);
+    
+    // Get dominant color from right edge
+    *right_color = get_dominant_color(surface, width - edge_width, 0, edge_width, height);
 }
 
 // Function to render text as a texture
 static SDL_Texture* render_text(const char *text, SDL_Color color) {
     if (!viewer.font || !text) return NULL;
 
-    SDL_Surface *surface = TTF_RenderText_Blended(viewer.font, text, color);
+    SDL_Surface *surface = TTF_RenderText_Blended(viewer.font, text, 0, color);
     if (!surface) {
-        fprintf(stderr, "Failed to render text: %s\n", TTF_GetError());
+        fprintf(stderr, "Failed to render text: %s\n", SDL_GetError());
         return NULL;
     }
 
     SDL_Texture *texture = SDL_CreateTextureFromSurface(viewer.renderer, surface);
-    SDL_FreeSurface(surface);
+    SDL_DestroySurface(surface);
 
     if (!texture) {
         fprintf(stderr, "Failed to create texture from text: %s\n", SDL_GetError());
@@ -914,11 +988,13 @@ static SDL_Texture* render_text(const char *text, SDL_Color color) {
 
 // Function to select monitor and get its position
 static bool select_monitor(int monitor_index, int *x, int *y) {
-    int num_displays = SDL_GetNumVideoDisplays();
+    int num_displays;
+    SDL_DisplayID* display_id = SDL_GetDisplays(&num_displays);
     if (num_displays <= 0) {
         fprintf(stderr, "No video displays available: %s\n", SDL_GetError());
         return false;
     }
+    SDL_free(display_id);
 
     if (monitor_index < 0 || monitor_index >= num_displays) {
         fprintf(stderr, "Invalid monitor index: %d\n", monitor_index);
@@ -941,7 +1017,7 @@ static void create_high_quality_texture(SDL_Renderer *renderer, ImageEntry *imag
     // Load the image as a surface
     image->surface = IMG_Load(image->path);
     if (!image->surface) {
-        fprintf(stderr, "Failed to load image %s: %s\n", image->path, IMG_GetError());
+        fprintf(stderr, "Failed to load image %s: %s\n", image->path, SDL_GetError());
         return;
     }
 
@@ -952,225 +1028,174 @@ static void create_high_quality_texture(SDL_Renderer *renderer, ImageEntry *imag
     int required_non_white = 3; // Number of non-white pixels required to stop scanning
     bool border_found = false;
     
-    // Lock surface for pixel access
-    if (SDL_LockSurface(image->surface) == 0) {
-        SDL_PixelFormat *fmt = image->surface->format;
-        int bpp = fmt->BytesPerPixel;
-        Uint8 *pixels = (Uint8*)image->surface->pixels;
-        int pitch = image->surface->pitch;
+    // Analyze pixels to detect borders
+    uint8_t *pixels = (uint8_t*)image->surface->pixels;
+    int pitch = image->surface->pitch;
+    SDL_PixelFormatDetails *details = SDL_GetPixelFormatDetails(image->surface->format);
+    int bpp = details->bytes_per_pixel;
+    
+    // Scan from left edge inward
+    border_found = true;
+    for (left = 0; left < image->surface->w / 2; left++) {
+        int non_white_count = 0;
         
-        // Scan from left edge inward
-        border_found = true;
-        for (left = 0; left < image->surface->w / 2; left++) {
-            int non_white_count = 0;
+        for (int y = 0; y < image->surface->h; y += 2) { // Sample every other pixel for speed
+            uint32_t pixel = 0;
+            uint8_t *p = pixels + y * pitch + left * bpp;
             
-            for (int y = 0; y < image->surface->h; y += 2) { // Sample every other pixel for speed
-                Uint32 pixel = 0;
-                Uint8 *p = pixels + y * pitch + left * bpp;
-                
-                switch (bpp) {
-                    case 1: pixel = *p; break;
-                    case 2: pixel = *(Uint16*)p; break;
-                    case 3: 
-                        #if SDL_BYTEORDER == SDL_BIG_ENDIAN
-                            pixel = p[0] << 16 | p[1] << 8 | p[2]; 
-                        #else
-                            pixel = p[0] | p[1] << 8 | p[2] << 16; 
-                        #endif
-                        break;
-                    case 4: pixel = *(Uint32*)p; break;
-                }
-                
-                Uint8 r, g, b;
-                SDL_GetRGB(pixel, fmt, &r, &g, &b);
-                
-                // If pixel is not "white" (using average of RGB values)
-                int avg = (r + g + b) / 3;
-                if (avg < threshold) {
-                    non_white_count++;
-                    if (non_white_count >= required_non_white) {
-                        break;
-                    }
-                }
+            switch (bpp) {
+                case 1: pixel = *p; break;
+                case 2: pixel = *(uint16_t*)p; break;
+                case 3: 
+                    #if SDL_BYTEORDER == SDL_BIG_ENDIAN
+                        pixel = p[0] << 16 | p[1] << 8 | p[2]; 
+                    #else
+                        pixel = p[0] | p[1] << 8 | p[2] << 16; 
+                    #endif
+                    break;
+                case 4: pixel = *(uint32_t*)p; break;
             }
             
-            if (non_white_count >= required_non_white) {
-                break; // Found non-white content
+            uint8_t r, g, b, a;
+            SDL_GetRGBA(pixel, details, SDL_GetSurfacePalette(image->surface), &r, &g, &b, &a);
+            
+            // If pixel is not "white" (using average of RGB values)
+            int avg = (r + g + b) / 3;
+            if (avg < threshold) {
+                non_white_count++;
+                if (non_white_count >= required_non_white) {
+                    break;
+                }
             }
         }
         
-        // Scan from right edge inward
-        for (right = image->surface->w - 1; right > left + 100; right--) { // Ensure min width
-            int non_white_count = 0;
-            
-            for (int y = 0; y < image->surface->h; y += 2) {
-                Uint32 pixel = 0;
-                Uint8 *p = pixels + y * pitch + right * bpp;
-                
-                switch (bpp) {
-                    case 1: pixel = *p; break;
-                    case 2: pixel = *(Uint16*)p; break;
-                    case 3: 
-                        #if SDL_BYTEORDER == SDL_BIG_ENDIAN
-                            pixel = p[0] << 16 | p[1] << 8 | p[2]; 
-                        #else
-                            pixel = p[0] | p[1] << 8 | p[2] << 16; 
-                        #endif
-                        break;
-                    case 4: pixel = *(Uint32*)p; break;
-                }
-                
-                Uint8 r, g, b;
-                SDL_GetRGB(pixel, fmt, &r, &g, &b);
-                
-                int avg = (r + g + b) / 3;
-                if (avg < threshold) {
-                    non_white_count++;
-                    if (non_white_count >= required_non_white) {
-                        break;
-                    }
-                }
-            }
-            
-            if (non_white_count >= required_non_white) {
-                break; // Found non-white content
-            }
-        }
-        
-        // Scan from top edge down
-        for (top = 0; top < image->surface->h / 2; top++) {
-            int non_white_count = 0;
-            
-            for (int x = left; x <= right; x += 2) {
-                Uint32 pixel = 0;
-                Uint8 *p = pixels + top * pitch + x * bpp;
-                
-                switch (bpp) {
-                    case 1: pixel = *p; break;
-                    case 2: pixel = *(Uint16*)p; break;
-                    case 3: 
-                        #if SDL_BYTEORDER == SDL_BIG_ENDIAN
-                            pixel = p[0] << 16 | p[1] << 8 | p[2]; 
-                        #else
-                            pixel = p[0] | p[1] << 8 | p[2] << 16; 
-                        #endif
-                        break;
-                    case 4: pixel = *(Uint32*)p; break;
-                }
-                
-                Uint8 r, g, b;
-                SDL_GetRGB(pixel, fmt, &r, &g, &b);
-                
-                int avg = (r + g + b) / 3;
-                if (avg < threshold) {
-                    non_white_count++;
-                    if (non_white_count >= required_non_white) {
-                        break;
-                    }
-                }
-            }
-            
-            if (non_white_count >= required_non_white) {
-                break; // Found non-white content
-            }
-        }
-        
-        // Scan from bottom edge up
-        for (bottom = image->surface->h - 1; bottom > top + 100; bottom--) { // Ensure min height
-            int non_white_count = 0;
-            
-            for (int x = left; x <= right; x += 2) {
-                Uint32 pixel = 0;
-                Uint8 *p = pixels + bottom * pitch + x * bpp;
-                
-                switch (bpp) {
-                    case 1: pixel = *p; break;
-                    case 2: pixel = *(Uint16*)p; break;
-                    case 3: 
-                        #if SDL_BYTEORDER == SDL_BIG_ENDIAN
-                            pixel = p[0] << 16 | p[1] << 8 | p[2]; 
-                        #else
-                            pixel = p[0] | p[1] << 8 | p[2] << 16; 
-                        #endif
-                        break;
-                    case 4: pixel = *(Uint32*)p; break;
-                }
-                
-                Uint8 r, g, b;
-                SDL_GetRGB(pixel, fmt, &r, &g, &b);
-                
-                int avg = (r + g + b) / 3;
-                if (avg < threshold) {
-                    non_white_count++;
-                    if (non_white_count >= required_non_white) {
-                        break;
-                    }
-                }
-            }
-            
-            if (non_white_count >= required_non_white) {
-                break; // Found non-white content
-            }
-        }
-        
-        SDL_UnlockSurface(image->surface);
-    }
-    
-    // Create a cropped surface only if we found significant borders
-    SDL_Surface *cropped_surface = image->surface;
-    int crop_width = right - left + 1;
-    int crop_height = bottom - top + 1;
-    
-    // Only crop if we found borders and they're significant (at least 10 pixels on any side)
-    bool should_crop = false;
-    
-    // Check if any edge has a significant border
-    if (left > 10 || (image->surface->w - 1 - right) > 10 || 
-        top > 10 || (image->surface->h - 1 - bottom) > 10) {
-        should_crop = true;
-    }
-    
-    // Don't crop if it would remove too much of the image
-    float crop_ratio = ((float)crop_width * crop_height) / 
-                       ((float)image->surface->w * image->surface->h);
-    if (crop_ratio < 0.5) { // Don't crop if we'd lose more than half the image
-        should_crop = false;
-    }
-    
-    if (should_crop && border_found) {
-        // Create a new surface for the cropped image
-        cropped_surface = SDL_CreateRGBSurfaceWithFormat(
-            0, crop_width, crop_height,
-            image->surface->format->BitsPerPixel,
-            image->surface->format->format
-        );
-        
-        if (cropped_surface) {
-            // Set up source and destination rectangles
-            SDL_Rect src_rect = { left, top, crop_width, crop_height };
-            SDL_Rect dst_rect = { 0, 0, crop_width, crop_height };
-
-            // Copy the cropped portion
-            SDL_BlitSurface(image->surface, &src_rect, cropped_surface, &dst_rect);
-            
-            // We're done with the original surface
-            SDL_FreeSurface(image->surface);
-        } else {
-            // Failed to create the new surface, stick with the original
-            cropped_surface = image->surface;
+        if (non_white_count >= required_non_white) {
+            break; // Found non-white content
         }
     }
-
-    image->surface = cropped_surface; // Update the image entry with the new surface
-    // Create the texture from the potentially cropped surface
+    
+    // Scan from right edge inward
+    for (right = image->surface->w - 1; right > left + 100; right--) { // Ensure min width
+        int non_white_count = 0;
+        
+        for (int y = 0; y < image->surface->h; y += 2) {
+            uint32_t pixel = 0;
+            uint8_t *p = pixels + y * pitch + right * bpp;
+            
+            switch (bpp) {
+                case 1: pixel = *p; break;
+                case 2: pixel = *(uint16_t*)p; break;
+                case 3: 
+                    #if SDL_BYTEORDER == SDL_BIG_ENDIAN
+                        pixel = p[0] << 16 | p[1] << 8 | p[2]; 
+                    #else
+                        pixel = p[0] | p[1] << 8 | p[2] << 16; 
+                    #endif
+                    break;
+                case 4: pixel = *(uint32_t*)p; break;
+            }
+            
+            uint8_t r, g, b, a;
+            SDL_GetRGBA(pixel, SDL_GetPixelFormatDetails(image->surface->format), SDL_GetSurfacePalette(image->surface), &r, &g, &b, &a);
+            
+            int avg = (r + g + b) / 3;
+            if (avg < threshold) {
+                non_white_count++;
+                if (non_white_count >= required_non_white) {
+                    break;
+                }
+            }
+        }
+        
+        if (non_white_count >= required_non_white) {
+            break; // Found non-white content
+        }
+    }
+    
+    // Scan from top edge down
+    for (top = 0; top < image->surface->h / 2; top++) {
+        int non_white_count = 0;
+        
+        for (int x = left; x <= right; x += 2) {
+            uint32_t pixel = 0;
+            uint8_t *p = pixels + top * pitch + x * bpp;
+            
+            switch (bpp) {
+                case 1: pixel = *p; break;
+                case 2: pixel = *(uint16_t*)p; break;
+                case 3: 
+                    #if SDL_BYTEORDER == SDL_BIG_ENDIAN
+                        pixel = p[0] << 16 | p[1] << 8 | p[2]; 
+                    #else
+                        pixel = p[0] | p[1] << 8 | p[2] << 16; 
+                    #endif
+                    break;
+                case 4: pixel = *(uint32_t*)p; break;
+            }
+            
+            uint8_t r, g, b, a;
+            SDL_GetRGBA(pixel, SDL_GetPixelFormatDetails(image->surface->format), SDL_GetSurfacePalette(image->surface), &r, &g, &b, &a);
+            
+            int avg = (r + g + b) / 3;
+            if (avg < threshold) {
+                non_white_count++;
+                if (non_white_count >= required_non_white) {
+                    break;
+                }
+            }
+        }
+        
+        if (non_white_count >= required_non_white) {
+            break; // Found non-white content
+        }
+    }
+    
+    // Scan from bottom edge up
+    for (bottom = image->surface->h - 1; bottom > top + 100; bottom--) { // Ensure min height
+        int non_white_count = 0;
+        
+        for (int x = left; x <= right; x += 2) {
+            uint32_t pixel = 0;
+            uint8_t *p = pixels + bottom * pitch + x * bpp;
+            
+            switch (bpp) {
+                case 1: pixel = *p; break;
+                case 2: pixel = *(uint16_t*)p; break;
+                case 3: 
+                    #if SDL_BYTEORDER == SDL_BIG_ENDIAN
+                        pixel = p[0] << 16 | p[1] << 8 | p[2]; 
+                    #else
+                        pixel = p[0] | p[1] << 8 | p[2] << 16; 
+                    #endif
+                    break;
+                case 4: pixel = *(uint32_t*)p; break;
+            }
+            
+            uint8_t r, g, b, a;
+            SDL_GetRGBA(pixel, SDL_GetPixelFormatDetails(image->surface->format), SDL_GetSurfacePalette(image->surface), &r, &g, &b, &a);
+            
+            int avg = (r + g + b) / 3;
+            if (avg < threshold) {
+                non_white_count++;
+                if (non_white_count >= required_non_white) {
+                    break;
+                }
+            }
+        }
+        
+        if (non_white_count >= required_non_white) {
+            break; // Found non-white content
+        }
+    }
+    
+    // Create a texture from the surface
     image->texture = SDL_CreateTextureFromSurface(renderer, image->surface);
     if (!image->texture) {
         fprintf(stderr, "Failed to create texture: %s\n", SDL_GetError());
     }
 }
 
-// Progress callback function for updating the progress bar
+// Helper function for progress callback
 static void update_progress(float progress, const char *message) {
-    // Update the progress bar
     progress_bar_update(progress, message);
 }

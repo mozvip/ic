@@ -7,7 +7,7 @@
 #define COMIC_LOADERS_H
 
 #include <stdbool.h>
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 
 // Include comic viewer types
 #include "comic_viewer.h"
@@ -17,8 +17,8 @@ typedef struct {
     char *path;               // Path to the image
     SDL_Surface *surface;     // Loaded surface
     SDL_Texture *texture;     // Loaded texture
-    int width;                // Original image width
-    int height;               // Original image height
+    float width;                // Original image width
+    float height;               // Original image height
 } ImageEntry;
 
 // Progress callback function type definition

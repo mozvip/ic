@@ -7,7 +7,7 @@
 #define PROGRESS_BAR_H
 
 #include <stdbool.h>
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 
 // Initialize the progress bar
 bool progress_bar_init(SDL_Renderer *renderer);

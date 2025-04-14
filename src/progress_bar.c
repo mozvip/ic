@@ -3,8 +3,8 @@
  * Implementation of a simple progress bar
  */
 
-#include <SDL2/SDL.h>
-#include <SDL2/SDL_ttf.h>
+#include <SDL3/SDL.h>
+#include <SDL3_ttf/SDL_ttf.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
@@ -31,7 +31,10 @@ bool progress_bar_init(SDL_Renderer *renderer) {
     if (!renderer) return false;
     
     // Get the window size
-    SDL_GetRendererOutputSize(renderer, &progress_bar.window_width, &progress_bar.window_height);
+    int output_w, output_h;
+    SDL_GetRenderOutputSize(renderer, &output_w, &output_h);
+    progress_bar.window_width = output_w;
+    progress_bar.window_height = output_h;
     
     // Load font - try to use the same font as the main app
     progress_bar.font = TTF_OpenFont("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 14);
@@ -80,7 +83,7 @@ void progress_bar_render(void) {
     SDL_RenderClear(progress_bar.renderer);
     
     // Draw progress bar background
-    SDL_Rect bg_rect = {
+    SDL_FRect bg_rect = {
         PROGRESS_BAR_PADDING,
         progress_bar.window_height / 2 - PROGRESS_BAR_HEIGHT / 2,
         progress_bar.window_width - (2 * PROGRESS_BAR_PADDING),
@@ -91,10 +94,10 @@ void progress_bar_render(void) {
     SDL_RenderFillRect(progress_bar.renderer, &bg_rect);
     
     // Draw progress bar fill
-    SDL_Rect fill_rect = {
+    SDL_FRect fill_rect = {
         PROGRESS_BAR_PADDING,
         progress_bar.window_height / 2 - PROGRESS_BAR_HEIGHT / 2,
-        (int)((progress_bar.window_width - (2 * PROGRESS_BAR_PADDING)) * progress_bar.progress),
+        (progress_bar.window_width - (2 * PROGRESS_BAR_PADDING)) * progress_bar.progress,
         PROGRESS_BAR_HEIGHT
     };
     
@@ -105,25 +108,25 @@ void progress_bar_render(void) {
     if (progress_bar.font && progress_bar.message[0] != '\0') {
         SDL_Color text_color = {255, 255, 255, 255};
         SDL_Surface *text_surface = TTF_RenderText_Blended(
-            progress_bar.font, progress_bar.message, text_color);
+            progress_bar.font, progress_bar.message, 0, text_color);
         
         if (text_surface) {
             SDL_Texture *text_texture = SDL_CreateTextureFromSurface(
                 progress_bar.renderer, text_surface);
             
             if (text_texture) {
-                SDL_Rect text_rect = {
+                SDL_FRect text_rect = {
                     (progress_bar.window_width - text_surface->w) / 2,
                     progress_bar.window_height / 2 - PROGRESS_BAR_HEIGHT / 2 - text_surface->h - TEXT_PADDING,
-                    text_surface->w,
-                    text_surface->h
+                    (float)text_surface->w,
+                    (float)text_surface->h
                 };
                 
-                SDL_RenderCopy(progress_bar.renderer, text_texture, NULL, &text_rect);
+                SDL_RenderTexture(progress_bar.renderer, text_texture, NULL, &text_rect);
                 SDL_DestroyTexture(text_texture);
             }
             
-            SDL_FreeSurface(text_surface);
+            SDL_DestroySurface(text_surface);
         }
     }
     
@@ -134,25 +137,25 @@ void progress_bar_render(void) {
     if (progress_bar.font) {
         SDL_Color percentage_color = {255, 255, 255, 255};
         SDL_Surface *percentage_surface = TTF_RenderText_Blended(
-            progress_bar.font, percentage, percentage_color);
+            progress_bar.font, percentage, 0, percentage_color);
         
         if (percentage_surface) {
             SDL_Texture *percentage_texture = SDL_CreateTextureFromSurface(
                 progress_bar.renderer, percentage_surface);
             
             if (percentage_texture) {
-                SDL_Rect percentage_rect = {
+                SDL_FRect percentage_rect = {
                     (progress_bar.window_width - percentage_surface->w) / 2,
                     progress_bar.window_height / 2 - percentage_surface->h / 2,
-                    percentage_surface->w,
-                    percentage_surface->h
+                    (float)percentage_surface->w,
+                    (float)percentage_surface->h
                 };
                 
-                SDL_RenderCopy(progress_bar.renderer, percentage_texture, NULL, &percentage_rect);
+                SDL_RenderTexture(progress_bar.renderer, percentage_texture, NULL, &percentage_rect);
                 SDL_DestroyTexture(percentage_texture);
             }
             
-            SDL_FreeSurface(percentage_surface);
+            SDL_DestroySurface(percentage_surface);
         }
     }
     
@@ -162,8 +165,8 @@ void progress_bar_render(void) {
     // Process events during rendering to keep the UI responsive
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
-        if (event.type == SDL_QUIT) {
-            exit(0); // Allow user to exit during loading
+        if (event.type == SDL_EVENT_QUIT) {
+     //FIXME       exit(0); // Allow user to exit during loading
         }
     }
 }
