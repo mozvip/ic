@@ -7,6 +7,7 @@
 #include <SDL3_ttf/SDL_ttf.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "progress_bar.h"
@@ -166,7 +167,7 @@ void progress_bar_render(void) {
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
         if (event.type == SDL_EVENT_QUIT) {
-     //FIXME       exit(0); // Allow user to exit during loading
+            exit(0); // Allow user to exit during loading
         }
     }
 }
