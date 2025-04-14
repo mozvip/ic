@@ -129,8 +129,8 @@ bool comic_viewer_init(int monitor_index) {
         printf("Renderer %d: %s\n", i, render_driver);
     }
     // Set the renderer to use the best available driver
-    // FIXME
     char *renderer_name = SDL_GetHint("SDL_RENDER_DRIVER");
+    printf("Using renderer: %s\n", renderer_name);
 
     // Create renderer with enhanced quality settings
     viewer.renderer = SDL_CreateRenderer(viewer.window, renderer_name);
@@ -643,65 +643,35 @@ void display_info()
     // Color constants
     SDL_Color bgColor = {50, 50, 50, 180};    // Semi-transparent dark gray
     SDL_Color fgColor = {255, 255, 255, 255}; // White
-    
-    // Draw semi-transparent background circle
-    SDL_SetRenderDrawColor(viewer.renderer, bgColor.r, bgColor.g, bgColor.b, bgColor.a);
-    
+       
     // Draw a filled circle using triangles like a pie chart
     int segments = 36; // Number of segments for a full circle
     float angle_step = 2.0f * M_PI / segments;
-    
-    // For SDL3, we use SDL_Vertex with SDL_RenderGeometry
-    // Background circle
-    SDL_Vertex *vertices = malloc(segments * 3 * sizeof(SDL_Vertex));
-    if (!vertices) return;
-    
-    for (int i = 0; i < segments; i++) {
-        float angle1 = i * angle_step;
-        float angle2 = (i + 1) * angle_step;
-        
-        float x1 = centerX + cosf(angle1) * radius;
-        float y1 = centerY + sinf(angle1) * radius;
-        float x2 = centerX + cosf(angle2) * radius;
-        float y2 = centerY + sinf(angle2) * radius;
-        
-        // Set up the three vertices for this triangle
-        vertices[i*3].position.x = (float)centerX;
-        vertices[i*3].position.y = (float)centerY;
-        vertices[i*3].color.r = bgColor.r;
-        vertices[i*3].color.g = bgColor.g;
-        vertices[i*3].color.b = bgColor.b;
-        vertices[i*3].color.a = bgColor.a;
-        
-        vertices[i*3+1].position.x = x1;
-        vertices[i*3+1].position.y = y1;
-        vertices[i*3+1].color.r = bgColor.r;
-        vertices[i*3+1].color.g = bgColor.g;
-        vertices[i*3+1].color.b = bgColor.b;
-        vertices[i*3+1].color.a = bgColor.a;
-        
-        vertices[i*3+2].position.x = x2;
-        vertices[i*3+2].position.y = y2;
-        vertices[i*3+2].color.r = bgColor.r;
-        vertices[i*3+2].color.g = bgColor.g;
-        vertices[i*3+2].color.b = bgColor.b;
-        vertices[i*3+2].color.a = bgColor.a;
-    }
-    
-    SDL_RenderGeometry(viewer.renderer, NULL, vertices, segments * 3, NULL, 0);
-    
+   
     // Draw progress fill
-    SDL_SetRenderDrawColor(viewer.renderer, fgColor.r, fgColor.g, fgColor.b, fgColor.a);
-    
     // Calculate filled segments based on progress
     int filledSegments = (int)(progress * segments);
     if (filledSegments < 1 && viewer.current_image > 0) filledSegments = 1;
+    if (filledSegments > segments) filledSegments = segments;
     
     // Starting angle: -90 degrees (top of the circle)
     float startAngle = -M_PI / 2.0f;
-    
-    // Reuse the vertices array for the filled segments
+    // Create a separate vertex array for the segments
+    SDL_Vertex *vertices = malloc(segments * 3 * sizeof(SDL_Vertex));
+    if (!vertices) {
+        return;
+    }
     for (int i = 0; i < filledSegments; i++) {
+
+        // Set the color for the triangle
+        SDL_Color color = {bgColor.r, bgColor.g, bgColor.b, bgColor.a};
+        if (i <= filledSegments) {
+            color.r = fgColor.r;
+            color.g = fgColor.g;
+            color.b = fgColor.b;
+            color.a = fgColor.a;
+        }
+
         float angle1 = startAngle + (i * angle_step);
         float angle2 = startAngle + ((i + 1) * angle_step);
         
@@ -713,29 +683,28 @@ void display_info()
         // Set up the three vertices for this triangle
         vertices[i*3].position.x = (float)centerX;
         vertices[i*3].position.y = (float)centerY;
-        vertices[i*3].color.r = fgColor.r;
-        vertices[i*3].color.g = fgColor.g;
-        vertices[i*3].color.b = fgColor.b;
-        vertices[i*3].color.a = fgColor.a;
+
+        vertices[i*3].color.r = color.r;
+        vertices[i*3].color.g = color.g;
+        vertices[i*3].color.b = color.b;
+        vertices[i*3].color.a = color.a;
         
         vertices[i*3+1].position.x = x1;
         vertices[i*3+1].position.y = y1;
-        vertices[i*3+1].color.r = fgColor.r;
-        vertices[i*3+1].color.g = fgColor.g;
-        vertices[i*3+1].color.b = fgColor.b;
-        vertices[i*3+1].color.a = fgColor.a;
+        vertices[i*3+1].color.r = color.r;
+        vertices[i*3+1].color.g = color.g;
+        vertices[i*3+1].color.b = color.b;
+        vertices[i*3+1].color.a = color.a;
         
         vertices[i*3+2].position.x = x2;
         vertices[i*3+2].position.y = y2;
-        vertices[i*3+2].color.r = fgColor.r;
-        vertices[i*3+2].color.g = fgColor.g;
-        vertices[i*3+2].color.b = fgColor.b;
-        vertices[i*3+2].color.a = fgColor.a;
+        vertices[i*3+2].color.r = color.r;
+        vertices[i*3+2].color.g = color.g;
+        vertices[i*3+2].color.b = color.b;
+        vertices[i*3+2].color.a = color.a;
     }
-    
-    if (filledSegments > 0) {
-        SDL_RenderGeometry(viewer.renderer, NULL, vertices, filledSegments * 3, NULL, 0);
-    }
+    // Render the filled segments
+    SDL_RenderGeometry(viewer.renderer, NULL, vertices, filledSegments * 3, NULL, 0);
     
     free(vertices);
     
@@ -758,6 +727,8 @@ void display_info()
         SDL_RenderTexture(viewer.renderer, text_texture, NULL, &text_rect);
         SDL_DestroyTexture(text_texture);
     }
+
+    
 }
 
 static void free_resources(void) {
@@ -1026,7 +997,6 @@ static void create_high_quality_texture(SDL_Renderer *renderer, ImageEntry *imag
     int top = 0, bottom = image->surface->h - 1;
     int threshold = 240; // Threshold for considering a pixel "white" (0-255)
     int required_non_white = 3; // Number of non-white pixels required to stop scanning
-    bool border_found = false;
     
     // Analyze pixels to detect borders
     uint8_t *pixels = (uint8_t*)image->surface->pixels;
@@ -1035,7 +1005,6 @@ static void create_high_quality_texture(SDL_Renderer *renderer, ImageEntry *imag
     int bpp = details->bytes_per_pixel;
     
     // Scan from left edge inward
-    border_found = true;
     for (left = 0; left < image->surface->w / 2; left++) {
         int non_white_count = 0;
         
@@ -1187,7 +1156,18 @@ static void create_high_quality_texture(SDL_Renderer *renderer, ImageEntry *imag
             break; // Found non-white content
         }
     }
-    
+
+    SDL_Rect crop_rect = {left, top, right - left + 1, bottom - top + 1};
+    if (left >= right || top >= bottom) {
+        fprintf(stderr, "Failed to detect valid crop area for image %s\n", image->path);
+    } else if (crop_rect.w < image->surface->w || crop_rect.h <= image->surface->h) {
+        // TODO: investigate if there is a faster way to crop the image
+        SDL_Surface *cropped_surface = SDL_CreateSurface(crop_rect.w, crop_rect.h, image->surface->format);
+        SDL_BlitSurface(image->surface, &crop_rect, cropped_surface, NULL);
+        SDL_DestroySurface(image->surface);
+        image->surface = cropped_surface;
+    }
+
     // Create a texture from the surface
     image->texture = SDL_CreateTextureFromSurface(renderer, image->surface);
     if (!image->texture) {
