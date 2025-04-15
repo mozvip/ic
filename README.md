@@ -1,6 +1,6 @@
 # IC - Image Comic Viewer
 
-IC (Image Comic Viewer) is a lightweight, fast comic book reader for Linux built with SDL2. It provides a smooth, high-quality reading experience for digital comics and image collections.
+IC (Image Comic Viewer) is a lightweight, fast comic book reader for Linux built with SDL3. It provides a smooth, high-quality reading experience for digital comics and image collections.
 
 ## Features
 
@@ -26,10 +26,10 @@ IC (Image Comic Viewer) is a lightweight, fast comic book reader for Linux built
 ## Requirements
 
 - Linux operating system
-- SDL2 libraries:
-  - libsdl2
-  - libsdl2-image
-  - libsdl2-ttf
+- SDL3 libraries:
+  - libsdl3
+  - libsdl3-image
+  - libsdl3-ttf
 
 ## Installation
 
@@ -44,23 +44,18 @@ IC (Image Comic Viewer) is a lightweight, fast comic book reader for Linux built
 2. Ensure you have the required development libraries:
    ```
    # For Debian/Ubuntu
-   sudo apt install libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev
+   sudo apt install libsdl3-dev libsdl3-image-dev libsdl3-ttf-dev
    
    # For Fedora
-   sudo dnf install SDL2-devel SDL2_image-devel SDL2_ttf-devel
+   sudo dnf install SDL3-devel SDL3_image-devel SDL3_ttf-devel
    
    # For Arch Linux
-   sudo pacman -S sdl2 sdl2_image sdl2_ttf
+   sudo pacman -S sdl3 sdl3_image sdl3_ttf
    ```
 
 3. Build the project:
    ```
    make
-   ```
-
-4. Install (optional):
-   ```
-   sudo make install
    ```
 
 ## Usage
@@ -109,4 +104,4 @@ Contributions welcome! Please feel free to submit a Pull Request.
 
 ## Acknowledgments
 
-- SDL2 for providing the rendering capabilities
+- SDL3 for providing the rendering capabilities
