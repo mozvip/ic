@@ -548,7 +548,7 @@ static void render_current_image(void) {
 
         // Render the current page
         SDL_FRect current_rect = {(float)x, (float)y, (float)scaled_width, (float)scaled_height};
-        SDL_RenderTexture(viewer.renderer, current_img->texture, NULL, &current_rect);
+        SDL_RenderTexture(viewer.renderer, current_img->texture, &current_img->crop_rect, &current_rect);
 
         // Render the next page with a page turn effect
         SDL_FRect next_rect = {(float)x, (float)y, (float)scaled_width, (float)scaled_height};
@@ -617,7 +617,7 @@ static void render_current_image(void) {
             
             // Use high-quality rendering with a specific blend mode for better results
             SDL_SetTextureBlendMode(img->texture, SDL_BLENDMODE_NONE);
-            SDL_RenderTexture(viewer.renderer, img->texture, NULL, &dest_rect);
+            SDL_RenderTexture(viewer.renderer, img->texture, &img->crop_rect, &dest_rect);
         }
     }
     
@@ -1003,6 +1003,8 @@ static void create_high_quality_texture(SDL_Renderer *renderer, ImageEntry *imag
     int pitch = image->surface->pitch;
     SDL_PixelFormatDetails *details = SDL_GetPixelFormatDetails(image->surface->format);
     int bpp = details->bytes_per_pixel;
+
+    SDL_Palette *palette = SDL_GetSurfacePalette(image->surface);
     
     // Scan from left edge inward
     for (left = 0; left < image->surface->w / 2; left++) {
@@ -1026,7 +1028,7 @@ static void create_high_quality_texture(SDL_Renderer *renderer, ImageEntry *imag
             }
             
             uint8_t r, g, b, a;
-            SDL_GetRGBA(pixel, details, SDL_GetSurfacePalette(image->surface), &r, &g, &b, &a);
+            SDL_GetRGBA(pixel, details, palette, &r, &g, &b, &a);
             
             // If pixel is not "white" (using average of RGB values)
             int avg = (r + g + b) / 3;
@@ -1065,7 +1067,7 @@ static void create_high_quality_texture(SDL_Renderer *renderer, ImageEntry *imag
             }
             
             uint8_t r, g, b, a;
-            SDL_GetRGBA(pixel, SDL_GetPixelFormatDetails(image->surface->format), SDL_GetSurfacePalette(image->surface), &r, &g, &b, &a);
+            SDL_GetRGBA(pixel, SDL_GetPixelFormatDetails(image->surface->format), palette, &r, &g, &b, &a);
             
             int avg = (r + g + b) / 3;
             if (avg < threshold) {
@@ -1103,7 +1105,7 @@ static void create_high_quality_texture(SDL_Renderer *renderer, ImageEntry *imag
             }
             
             uint8_t r, g, b, a;
-            SDL_GetRGBA(pixel, SDL_GetPixelFormatDetails(image->surface->format), SDL_GetSurfacePalette(image->surface), &r, &g, &b, &a);
+            SDL_GetRGBA(pixel, SDL_GetPixelFormatDetails(image->surface->format), palette, &r, &g, &b, &a);
             
             int avg = (r + g + b) / 3;
             if (avg < threshold) {
@@ -1141,7 +1143,7 @@ static void create_high_quality_texture(SDL_Renderer *renderer, ImageEntry *imag
             }
             
             uint8_t r, g, b, a;
-            SDL_GetRGBA(pixel, SDL_GetPixelFormatDetails(image->surface->format), SDL_GetSurfacePalette(image->surface), &r, &g, &b, &a);
+            SDL_GetRGBA(pixel, SDL_GetPixelFormatDetails(image->surface->format), palette, &r, &g, &b, &a);
             
             int avg = (r + g + b) / 3;
             if (avg < threshold) {
@@ -1157,16 +1159,15 @@ static void create_high_quality_texture(SDL_Renderer *renderer, ImageEntry *imag
         }
     }
 
-    SDL_Rect crop_rect = {left, top, right - left + 1, bottom - top + 1};
-    if (left >= right || top >= bottom) {
-        fprintf(stderr, "Failed to detect valid crop area for image %s\n", image->path);
-    } else if (crop_rect.w < image->surface->w || crop_rect.h <= image->surface->h) {
-        // TODO: investigate if there is a faster way to crop the image
-        SDL_Surface *cropped_surface = SDL_CreateSurface(crop_rect.w, crop_rect.h, image->surface->format);
-        SDL_BlitSurface(image->surface, &crop_rect, cropped_surface, NULL);
-        SDL_DestroySurface(image->surface);
-        image->surface = cropped_surface;
+    SDL_FRect crop_rect = {left, top, right - left + 1, bottom - top + 1};
+    if (crop_rect.w <= 0 || crop_rect.h <= 0) {
+        // reset crop rect to full image size
+        crop_rect.x = 0;
+        crop_rect.y = 0;
+        crop_rect.w = image->surface->w;
+        crop_rect.h = image->surface->h;
     }
+    image->crop_rect = crop_rect;
 
     // Create a texture from the surface
     image->texture = SDL_CreateTextureFromSurface(renderer, image->surface);

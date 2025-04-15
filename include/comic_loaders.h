@@ -19,6 +19,7 @@ typedef struct {
     SDL_Texture *texture;     // Loaded texture
     float width;                // Original image width
     float height;               // Original image height
+    SDL_FRect crop_rect;       // Crop rectangle for the image
 } ImageEntry;
 
 // Progress callback function type definition
