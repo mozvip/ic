@@ -133,11 +133,11 @@ bool comic_viewer_init(int monitor_index) {
     // get names of all available renderers
     int num_renderers = SDL_GetNumRenderDrivers();
     for (int i = 0; i < num_renderers; i++) {
-        char *render_driver = SDL_GetRenderDriver(i);
+        const char *render_driver = SDL_GetRenderDriver(i);
         printf("Renderer %d: %s\n", i, render_driver);
     }
     // Set the renderer to use the best available driver
-    char *renderer_name = SDL_GetHint("SDL_RENDER_DRIVER");
+    const char *renderer_name = SDL_GetHint("SDL_RENDER_DRIVER");
     printf("Using renderer: %s\n", renderer_name);
 
     // Create renderer with enhanced quality settings
@@ -790,7 +790,7 @@ static SDL_Color get_dominant_color(SDL_Surface *surface, int x, int y, int widt
     int dominant_index = 0;
     
     // Get pixel format
-    SDL_PixelFormatDetails *fmt = SDL_GetPixelFormatDetails(surface->format);
+    const SDL_PixelFormatDetails *fmt = SDL_GetPixelFormatDetails(surface->format);
     int bpp = fmt->bytes_per_pixel;
     
     // Scan the specified region with bounds checking
@@ -961,7 +961,7 @@ static void create_high_quality_texture(SDL_Renderer *renderer, ImageEntry *imag
     // Analyze pixels to detect borders
     uint8_t *pixels = (uint8_t*)image->surface->pixels;
     int pitch = image->surface->pitch;
-    SDL_PixelFormatDetails *details = SDL_GetPixelFormatDetails(image->surface->format);
+    const SDL_PixelFormatDetails *details = SDL_GetPixelFormatDetails(image->surface->format);
     int bpp = details->bytes_per_pixel;
 
     SDL_Palette *palette = SDL_GetSurfacePalette(image->surface);
@@ -1141,10 +1141,7 @@ static void update_progress(float progress, const char *message) {
     progress_bar_update(progress, message);
 }
 
-static void draw_progress_indicator(float progress, int centerX, int centerY, int radius) {
-    // Color constants
-    SDL_Color bgColor = {0, 0, 0, 255};    // Semi-transparent dark gray
-    
+static void draw_progress_indicator(float progress, int centerX, int centerY, int radius) {   
     // Draw a filled circle using triangles like a pie chart
     int segments = 36; // Number of segments for a full circle
     float angle_step = 2.0f * M_PI / segments;
