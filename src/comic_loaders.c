@@ -17,69 +17,6 @@
 extern const char* get_filename_from_path(const char* path);
 extern bool is_image_file(const char *filename);
 
-// Include libunrar headers - use C linkage for C++ headers
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-// If using unrar library in C code, we need to define these ourselves
-#ifndef UNRAR_HEADERS
-#define UNRAR_HEADERS
-
-typedef void* HANDLE;
-typedef unsigned int UINT;
-typedef unsigned long DWORD;
-
-#define RAR_OM_EXTRACT 1
-#define RAR_SKIP 0
-#define RAR_TEST 1
-#define RAR_EXTRACT 2
-
-typedef struct RAROpenArchiveDataEx
-{
-  char *ArcName;
-  char *ArcNameW;
-  unsigned int OpenMode;
-  unsigned int OpenResult;
-  char *CmtBuf;
-  unsigned int CmtBufSize;
-  unsigned int CmtSize;
-  unsigned int CmtState;
-  unsigned int Flags;
-  unsigned int Reserved[32];
-} RAROpenArchiveDataEx;
-
-typedef struct RARHeaderDataEx
-{
-  char FileName[260];
-  unsigned int Flags;
-  unsigned int PackSize;
-  unsigned int UnpSize;
-  unsigned int HostOS;
-  unsigned int FileCRC;
-  unsigned int FileTime;
-  unsigned int UnpVer;
-  unsigned int Method;
-  unsigned int FileAttr;
-  char *CmtBuf;
-  unsigned int CmtBufSize;
-  unsigned int CmtSize;
-  unsigned int CmtState;
-  unsigned int Reserved[1024];
-} RARHeaderDataEx;
-
-// Function prototypes for libunrar
-HANDLE RAROpenArchiveEx(RAROpenArchiveDataEx *ArchiveData);
-int RARReadHeaderEx(HANDLE hArcData, RARHeaderDataEx *HeaderData);
-int RARProcessFile(HANDLE hArcData, int Operation, char *DestPath, char *DestName);
-int RARCloseArchive(HANDLE hArcData);
-
-#endif // UNRAR_HEADERS
-
-#ifdef __cplusplus
-}
-#endif
-
 // Common functions for on-demand loading
 ArchiveHandle* archive_open(const char *path, ArchiveType type, int *total_images, ProgressCallback progress_cb) {
     if (!path || !total_images) {
