@@ -22,6 +22,9 @@
 // Maximum number of images we can handle
 #define MAX_IMAGES 1000
 
+SDL_Color white = {255, 255, 255, 255}; // White
+
+
 // Global state
 static struct {
     SourceType type;          // Type of source (CBZ, CBR, directory)
@@ -50,6 +53,10 @@ static struct {
     float page_turn_progress; // Progress of the page-turn animation (0.0 to 1.0)
     int target_image;         // The target image index for the page turn
     int direction;          // Direction of the page turn (1 for next, -1 for previous)
+    
+    // Progress indicator display timer
+    Uint64 last_page_change_time;  // Time when the last page change occurred
+    bool show_progress_indicator;  // Whether to show the progress indicator
 } viewer = {0};
 
 // Forward declarations for internal functions
@@ -68,6 +75,7 @@ static SDL_Texture* render_text(const char *text, SDL_Color color);
 static bool select_monitor(int monitor_index, int *x, int *y);
 static void create_high_quality_texture(SDL_Renderer *renderer, ImageEntry *image);
 static void update_progress(float progress, const char *message);
+static void draw_progress_indicator(float progress, int centerX, int centerY, int radius);
 
 bool comic_viewer_init(int monitor_index) {
     // Force SDL to use Wayland backend
@@ -188,6 +196,10 @@ bool comic_viewer_init(int monitor_index) {
     viewer.running = false;
     viewer.fullscreen = false;
     viewer.archive = NULL;
+    
+    // Initialize progress indicator timer
+    viewer.last_page_change_time = 0;
+    viewer.show_progress_indicator = false;
 
     for (int i = 0; i < MAX_IMAGES; i++) {
         viewer.images[i].path = NULL;
@@ -472,6 +484,10 @@ void next_page()
         unload_image(viewer.current_image - 1); // Unload previous image to save memory
     }
 
+    // Update the page change timer
+    viewer.last_page_change_time = SDL_GetTicks();
+    viewer.show_progress_indicator = true;
+
     if (viewer.page_turning_enabled){
         viewer.target_image = viewer.current_image + 1;
         viewer.page_turning_enabled = true;
@@ -501,6 +517,10 @@ void previous_page()
     {
         unload_image(viewer.current_image + 1);
     }
+
+    // Update the page change timer
+    viewer.last_page_change_time = SDL_GetTicks();
+    viewer.show_progress_indicator = true;
 
     if (viewer.page_turning_enabled){
         viewer.target_image = viewer.current_image - 1;
@@ -631,104 +651,44 @@ void display_info()
 {
     // Only show progress indicator if we have more than one image
     if (viewer.image_count <= 1) return;
-    
-    // Calculate progress as a value between 0.0 and 1.0
-    float progress = (float)viewer.current_image / (float)(viewer.image_count - 1);
-    
-    // Circle properties
-    int radius = 40;
-    int centerX = 50;
-    int centerY = 50;
-    
-    // Color constants
-    SDL_Color bgColor = {50, 50, 50, 180};    // Semi-transparent dark gray
-    SDL_Color fgColor = {255, 255, 255, 255}; // White
        
-    // Draw a filled circle using triangles like a pie chart
-    int segments = 36; // Number of segments for a full circle
-    float angle_step = 2.0f * M_PI / segments;
-   
-    // Draw progress fill
-    // Calculate filled segments based on progress
-    int filledSegments = (int)(progress * segments);
-    if (filledSegments < 1 && viewer.current_image > 0) filledSegments = 1;
-    if (filledSegments > segments) filledSegments = segments;
+    // Check if we should display the progress indicator
+    Uint64 current_time = SDL_GetTicks();
+    Uint64 elapsed_time = current_time - viewer.last_page_change_time;
     
-    // Starting angle: -90 degrees (top of the circle)
-    float startAngle = -M_PI / 2.0f;
-    // Create a separate vertex array for the segments
-    SDL_Vertex *vertices = malloc(segments * 3 * sizeof(SDL_Vertex));
-    if (!vertices) {
-        return;
-    }
-    for (int i = 0; i < filledSegments; i++) {
+    // Only show progress indicator for 2 seconds (2000 ms) after a page change
+    if (elapsed_time <= 2000) {
+        // Calculate progress as a value between 0.0 and 1.0
+        float progress = (float)viewer.current_image / (float)(viewer.image_count - 1);
+        
+        // Circle properties
+        int radius = 40;
+        int centerX = 50;
+        int centerY = 50;
 
-        // Set the color for the triangle
-        SDL_Color color = {bgColor.r, bgColor.g, bgColor.b, bgColor.a};
-        if (i <= filledSegments) {
-            color.r = fgColor.r;
-            color.g = fgColor.g;
-            color.b = fgColor.b;
-            color.a = fgColor.a;
+        // Draw the progress indicator
+        draw_progress_indicator(progress, centerX, centerY, radius);
+                
+        // Display page number and total
+        char info_text[32];
+        snprintf(info_text, sizeof(info_text), "%d / %d", viewer.current_image + 1, viewer.image_count);
+        
+        SDL_Texture *text_texture = render_text(info_text, white);
+        if (text_texture) {
+            float text_width, text_height;
+            SDL_GetTextureSize(text_texture, &text_width, &text_height);
+            
+            SDL_FRect text_rect = {
+                (float)(centerX - text_width / 2),
+                (float)(centerY + radius + 10),
+                (float)text_width,
+                (float)text_height
+            };
+            
+            SDL_RenderTexture(viewer.renderer, text_texture, NULL, &text_rect);
+            SDL_DestroyTexture(text_texture);
         }
-
-        float angle1 = startAngle + (i * angle_step);
-        float angle2 = startAngle + ((i + 1) * angle_step);
-        
-        float x1 = centerX + cosf(angle1) * radius;
-        float y1 = centerY + sinf(angle1) * radius;
-        float x2 = centerX + cosf(angle2) * radius;
-        float y2 = centerY + sinf(angle2) * radius;
-        
-        // Set up the three vertices for this triangle
-        vertices[i*3].position.x = (float)centerX;
-        vertices[i*3].position.y = (float)centerY;
-
-        vertices[i*3].color.r = color.r;
-        vertices[i*3].color.g = color.g;
-        vertices[i*3].color.b = color.b;
-        vertices[i*3].color.a = color.a;
-        
-        vertices[i*3+1].position.x = x1;
-        vertices[i*3+1].position.y = y1;
-        vertices[i*3+1].color.r = color.r;
-        vertices[i*3+1].color.g = color.g;
-        vertices[i*3+1].color.b = color.b;
-        vertices[i*3+1].color.a = color.a;
-        
-        vertices[i*3+2].position.x = x2;
-        vertices[i*3+2].position.y = y2;
-        vertices[i*3+2].color.r = color.r;
-        vertices[i*3+2].color.g = color.g;
-        vertices[i*3+2].color.b = color.b;
-        vertices[i*3+2].color.a = color.a;
     }
-    // Render the filled segments
-    SDL_RenderGeometry(viewer.renderer, NULL, vertices, filledSegments * 3, NULL, 0);
-    
-    free(vertices);
-    
-    // Display page number and total
-    char info_text[32];
-    snprintf(info_text, sizeof(info_text), "%d / %d", viewer.current_image + 1, viewer.image_count);
-    
-    SDL_Texture *text_texture = render_text(info_text, fgColor);
-    if (text_texture) {
-        float text_width, text_height;
-        SDL_GetTextureSize(text_texture, &text_width, &text_height);
-        
-        SDL_FRect text_rect = {
-            (float)(centerX - text_width / 2),
-            (float)(centerY + radius + 10),
-            (float)text_width,
-            (float)text_height
-        };
-        
-        SDL_RenderTexture(viewer.renderer, text_texture, NULL, &text_rect);
-        SDL_DestroyTexture(text_texture);
-    }
-
-    
 }
 
 static void free_resources(void) {
@@ -1138,7 +1098,7 @@ static void create_high_quality_texture(SDL_Renderer *renderer, ImageEntry *imag
                     #else
                         pixel = p[0] | p[1] << 8 | p[2] << 16; 
                     #endif
-                    break;
+                        break;
                 case 4: pixel = *(uint32_t*)p; break;
             }
             
@@ -1179,4 +1139,64 @@ static void create_high_quality_texture(SDL_Renderer *renderer, ImageEntry *imag
 // Helper function for progress callback
 static void update_progress(float progress, const char *message) {
     progress_bar_update(progress, message);
+}
+
+static void draw_progress_indicator(float progress, int centerX, int centerY, int radius) {
+    // Color constants
+    SDL_Color bgColor = {0, 0, 0, 255};    // Semi-transparent dark gray
+    
+    // Draw a filled circle using triangles like a pie chart
+    int segments = 36; // Number of segments for a full circle
+    float angle_step = 2.0f * M_PI / segments;
+    
+    // Calculate filled segments based on progress
+    int filledSegments = (int)(progress * segments);
+    if (filledSegments < 1 && progress > 0) filledSegments = 1;
+    if (filledSegments > segments) filledSegments = segments;
+    
+    // Starting angle: -90 degrees (top of the circle)
+    float startAngle = -M_PI_2;
+    
+    // Create a separate vertex array for the segments
+    SDL_Vertex *vertices = malloc(filledSegments * 3 * sizeof(SDL_Vertex));
+    if (!vertices) {
+        return;
+    }
+    
+    for (int i = 0; i < filledSegments; i++) {
+        float angle1 = startAngle + (i * angle_step);
+        float angle2 = startAngle + ((i + 1) * angle_step);
+        
+        float x1 = centerX + cosf(angle1) * radius;
+        float y1 = centerY + sinf(angle1) * radius;
+        float x2 = centerX + cosf(angle2) * radius;
+        float y2 = centerY + sinf(angle2) * radius;
+        
+        // Set up the three vertices for this triangle
+        vertices[i*3].position.x = (float)centerX;
+        vertices[i*3].position.y = (float)centerY;
+        vertices[i*3].color.r = white.r;
+        vertices[i*3].color.g = white.g;
+        vertices[i*3].color.b = white.b;
+        vertices[i*3].color.a = white.a;
+        
+        vertices[i*3+1].position.x = x1;
+        vertices[i*3+1].position.y = y1;
+        vertices[i*3+1].color.r = white.r;
+        vertices[i*3+1].color.g = white.g;
+        vertices[i*3+1].color.b = white.b;
+        vertices[i*3+1].color.a = white.a;
+        
+        vertices[i*3+2].position.x = x2;
+        vertices[i*3+2].position.y = y2;
+        vertices[i*3+2].color.r = white.r;
+        vertices[i*3+2].color.g = white.g;
+        vertices[i*3+2].color.b = white.b;
+        vertices[i*3+2].color.a = white.a;
+    }
+    
+    // Render all segments
+    SDL_RenderGeometry(viewer.renderer, NULL, vertices, filledSegments * 3, NULL, 0);
+    
+    free(vertices);
 }
