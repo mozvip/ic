@@ -28,9 +28,29 @@ ArchiveHandle* archive_open(const char *path, ArchiveType type, int *total_image
     switch (type) {
         case ARCHIVE_TYPE_CBZ:
             handle = cbz_open(path, total_images, progress_cb);
+            // If CBZ loading fails, try as CBR (some files are misnamed)
+            if (!handle) {
+                fprintf(stderr, "CBZ loading failed, attempting to load as CBR...\n");
+                handle = cbr_open(path, total_images, progress_cb);
+                if (handle) {
+                    // Update the handle type to reflect that we're treating it as a CBR
+                    handle->type = ARCHIVE_TYPE_CBR;
+                    fprintf(stderr, "Successfully loaded file as CBR\n");
+                }
+            }
             break;
         case ARCHIVE_TYPE_CBR:
             handle = cbr_open(path, total_images, progress_cb);
+            // If CBR loading fails, try as CBZ (some files are misnamed)
+            if (!handle) {
+                fprintf(stderr, "CBR loading failed, attempting to load as CBZ...\n");
+                handle = cbz_open(path, total_images, progress_cb);
+                if (handle) {
+                    // Update the handle type to reflect that we're treating it as a CBZ
+                    handle->type = ARCHIVE_TYPE_CBZ;
+                    fprintf(stderr, "Successfully loaded file as CBZ\n");
+                }
+            }
             break;
         case ARCHIVE_TYPE_PDF:
             handle = pdf_open(path, total_images, progress_cb);
