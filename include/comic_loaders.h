@@ -12,37 +12,8 @@
 // Include comic viewer types
 #include "comic_viewer.h"
 
-// Image entry structure used by loaders
-typedef struct {
-    char *path;               // Path to the image
-    SDL_Surface *surface;     // Loaded surface
-    SDL_Texture *texture;     // Loaded texture
-    float width;                // Original image width
-    float height;               // Original image height
-    SDL_FRect crop_rect;       // Crop rectangle for the image
-} ImageEntry;
-
 // Progress callback function type definition
 typedef void (*ProgressCallback)(float progress, const char *message);
-
-// Archive handle for on-demand loading
-typedef enum {
-    ARCHIVE_TYPE_NONE,
-    ARCHIVE_TYPE_CBZ,
-    ARCHIVE_TYPE_CBR,
-    ARCHIVE_TYPE_PDF
-} ArchiveType;
-
-// Complete definition of ArchiveHandle structure
-typedef struct ArchiveHandle {
-    ArchiveType type;           // Type of archive
-    char *path;                 // Path to the archive file
-    int total_images;           // Total number of images in the archive
-    char *temp_dir;             // Temporary directory for extracted files
-    void *archive_ptr;          // Pointer to the archive-specific handle
-    char **entry_names;         // Array of entry names (for CBZ/CBR)
-    int *page_indices;          // Array of page indices (for PDF)
-} ArchiveHandle;
 
 // Function to check if a file is a supported image
 bool is_image_file(const char *filename);

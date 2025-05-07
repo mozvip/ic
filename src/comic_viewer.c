@@ -18,46 +18,11 @@
 #include "comic_viewer.h"
 #include "comic_loaders.h"
 #include "progress_bar.h"
-
-// Maximum number of images we can handle
-#define MAX_IMAGES 1000
+#include "progress_indicator.h" // Moved here
 
 SDL_Color white = {255, 255, 255, 255}; // White
 
-
-// Global state
-static struct {
-    SourceType type;          // Type of source (CBZ, CBR, directory)
-    char *source_path;        // Path to the source
-    ImageEntry images[MAX_IMAGES];  // Array of image entries
-    int image_count;          // Number of images
-    int current_image;        // Current image index
-    int preloaded_image;      // Index of preloaded image (next image)
-    SDL_Window *window;       // Main SDL window
-    SDL_Renderer *renderer;   // SDL renderer
-    int window_width;         // Window width
-    int window_height;        // Window height
-
-    int drawable_width;      // Drawable width (for HiDPI)
-    int drawable_height;     // Drawable height (for HiDPI)
-
-    bool running;             // Main loop control
-    bool fullscreen;          // Fullscreen state
-    TTF_Font *font;           // Font for rendering text
-    int monitor_index;        // Selected monitor index
-    ArchiveHandle *archive;   // Handle for on-demand loading
-
-    // Page-turn animation state
-    bool page_turning_enabled;              // Whether a page-turn animations are enabled
-    bool page_turning_in_progress;  // Whether a page-turn animation is in progress
-    float page_turn_progress; // Progress of the page-turn animation (0.0 to 1.0)
-    int target_image;         // The target image index for the page turn
-    int direction;          // Direction of the page turn (1 for next, -1 for previous)
-    
-    // Progress indicator display timer
-    Uint64 last_page_change_time;  // Time when the last page change occurred
-    bool show_progress_indicator;  // Whether to show the progress indicator
-} viewer = {0};
+struct ViewerState viewer; // Define the global viewer variable
 
 // Forward declarations for internal functions
 static void free_resources(void);
@@ -75,7 +40,6 @@ static SDL_Texture* render_text(const char *text, SDL_Color color);
 static bool select_monitor(int monitor_index, int *x, int *y);
 static void create_high_quality_texture(SDL_Renderer *renderer, ImageEntry *image);
 static void update_progress(float progress, const char *message);
-static void draw_progress_indicator(float progress, int centerX, int centerY, int radius);
 
 bool comic_viewer_init(int monitor_index) {
     // Force SDL to use Wayland backend
@@ -667,7 +631,7 @@ void display_info()
         int centerY = 50;
 
         // Draw the progress indicator
-        draw_progress_indicator(progress, centerX, centerY, radius);
+        draw_progress_indicator(viewer.renderer, progress, centerX, centerY, radius); // Pass viewer.renderer
                 
         // Display page number and total
         char info_text[32];
@@ -1141,59 +1105,82 @@ static void update_progress(float progress, const char *message) {
     progress_bar_update(progress, message);
 }
 
-static void draw_progress_indicator(float progress, int centerX, int centerY, int radius) {   
-    // Draw a filled circle using triangles like a pie chart
-    int segments = 36; // Number of segments for a full circle
-    float angle_step = 2.0f * M_PI / segments;
-    
-    // Calculate filled segments based on progress
-    int filledSegments = (int)(progress * segments);
-    if (filledSegments < 1 && progress > 0) filledSegments = 1;
-    if (filledSegments > segments) filledSegments = segments;
-    
-    // Starting angle: -90 degrees (top of the circle)
-    float startAngle = -M_PI_2;
-    
-    // Create a separate vertex array for the segments
-    SDL_Vertex *vertices = malloc(filledSegments * 3 * sizeof(SDL_Vertex));
-    if (!vertices) {
+void next_view() {
+    if (viewer.current_view == viewer.view_count - 1 || viewer.page_turning_in_progress) {
         return;
     }
     
-    for (int i = 0; i < filledSegments; i++) {
-        float angle1 = startAngle + (i * angle_step);
-        float angle2 = startAngle + ((i + 1) * angle_step);
-        
-        float x1 = centerX + cosf(angle1) * radius;
-        float y1 = centerY + sinf(angle1) * radius;
-        float x2 = centerX + cosf(angle2) * radius;
-        float y2 = centerY + sinf(angle2) * radius;
-        
-        // Set up the three vertices for this triangle
-        vertices[i*3].position.x = (float)centerX;
-        vertices[i*3].position.y = (float)centerY;
-        vertices[i*3].color.r = white.r;
-        vertices[i*3].color.g = white.g;
-        vertices[i*3].color.b = white.b;
-        vertices[i*3].color.a = white.a;
-        
-        vertices[i*3+1].position.x = x1;
-        vertices[i*3+1].position.y = y1;
-        vertices[i*3+1].color.r = white.r;
-        vertices[i*3+1].color.g = white.g;
-        vertices[i*3+1].color.b = white.b;
-        vertices[i*3+1].color.a = white.a;
-        
-        vertices[i*3+2].position.x = x2;
-        vertices[i*3+2].position.y = y2;
-        vertices[i*3+2].color.r = white.r;
-        vertices[i*3+2].color.g = white.g;
-        vertices[i*3+2].color.b = white.b;
-        vertices[i*3+2].color.a = white.a;
+    // Update the page change timer
+    viewer.last_page_change_time = SDL_GetTicks();
+    viewer.show_progress_indicator = true;
+    
+    // Unload previous images
+    for (int i = 0; i < viewer.views[viewer.current_view].count; i++) {
+        int img_idx = viewer.views[viewer.current_view].image_indices[i];
+        unload_image(img_idx);
     }
     
-    // Render all segments
-    SDL_RenderGeometry(viewer.renderer, NULL, vertices, filledSegments * 3, NULL, 0);
+    // Move to next view
+    viewer.current_view++;
     
-    free(vertices);
+    // Load current images
+    for (int i = 0; i < viewer.views[viewer.current_view].count; i++) {
+        int img_idx = viewer.views[viewer.current_view].image_indices[i];
+        load_image(img_idx);
+    }
+}
+
+void generate_default_views() {
+    // Clear any existing views
+    if (viewer.views) {
+        free(viewer.views);
+    }
+    
+    // Allocate views
+    viewer.views = malloc(viewer.image_count * sizeof(ImageView));
+    if (!viewer.views) {
+        fprintf(stderr, "Failed to allocate memory for views\n");
+        return;
+    }
+    
+    viewer.view_count = 0;
+    int i = 0;
+    
+    while (i < viewer.image_count) {
+        ImageView *view = &viewer.views[viewer.view_count];
+        view->count = 0;
+
+        // Determine if this is a spread
+        bool is_spread = false;
+        if (viewer.auto_detect_spreads && i < viewer.image_count - 1) {
+            // Check if this image is part of a spread (e.g., by aspect ratio)
+            // If width > height * 0.8, it might be part of a spread
+            float aspect1 = (float)viewer.images[i].width / viewer.images[i].height;
+            float aspect2 = (float)viewer.images[i+1].width / viewer.images[i+1].height;
+
+            if (aspect1 < 0.8 && aspect2 < 0.8) {
+                is_spread = true;
+            }
+        }
+        
+        if (is_spread && viewer.multiple_images_mode) {
+            // Add both images to this view
+            if (viewer.right_to_left) {
+                view->image_indices[0] = i + 1;  // Right page
+                view->image_indices[1] = i;      // Left page
+            } else {
+                view->image_indices[0] = i;      // Left page
+                view->image_indices[1] = i + 1;  // Right page
+            }
+            view->count = 2;
+            i += 2;
+        } else {
+            // Single image view
+            view->image_indices[0] = i;
+            view->count = 1;
+            i++;
+        }
+        
+        viewer.view_count++;
+    }
 }
