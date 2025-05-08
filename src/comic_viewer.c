@@ -14,6 +14,7 @@
 #include <SDL3/SDL.h>
 #include <SDL3_image/SDL_image.h>
 #include <SDL3_ttf/SDL_ttf.h>
+#include <SDL3/SDL_hints.h>
 
 #include "comic_viewer.h"
 #include "comic_loaders.h"
@@ -42,8 +43,10 @@ static void create_high_quality_texture(SDL_Renderer *renderer, ImageEntry *imag
 static void update_progress(float progress, const char *message);
 
 bool comic_viewer_init(int monitor_index) {
-    // Force SDL to use Wayland backend
-    SDL_SetHint("SDL_VIDEODRIVER", "wayland");
+    // Set the video driver hint to Wayland before initializing SDL
+    if (SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "wayland") == 0) {
+        fprintf(stderr, "Warning: Failed to set Wayland video driver hint: %s\n", SDL_GetError());
+    }
     
     // Enable HiDPI scaling
     SDL_SetHint("SDL_WINDOW_ALLOW_HIGHDPI", "1");
