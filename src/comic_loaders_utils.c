@@ -3,10 +3,12 @@
  * Common utility functions for comic file loaders
  */
 
+#define _GNU_SOURCE // Required for strverscmp
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+#include <ctype.h> // For isalnum, if needed for get_filename_from_path or is_image_file
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -29,9 +31,14 @@ const char* get_filename_from_path(const char* path) {
     return last_separator + 1;
 }
 
-// Function to compare image filenames for sorting
+/**
+ * Compares two image filenames for natural sort order.
+ * e.g., "name2.jpg" comes before "name10.jpg".
+ */
 int image_name_compare(const void *a, const void *b) {
-    return strcmp(*(const char **)a, *(const char **)b);
+    const char *s1 = *(const char**)a;
+    const char *s2 = *(const char**)b;
+    return strverscmp(s1, s2);
 }
 
 bool is_image_file(const char *filename) {
