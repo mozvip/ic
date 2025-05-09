@@ -45,15 +45,21 @@ static int get_pdf_page_count(const char *path) {
 }
 
 // Extract a single page from PDF using pdfimages
-static char* extract_pdf_page(const char *pdf_path, int page_index, const char *output_prefix, bool *success) {
+static char* extract_pdf_page(const char *pdf_path, int page_index, const char *output_prefix, const char *expected_path, bool *success) {
     char *escaped_pdf_path = escape_shell_arg(pdf_path);
     char *escaped_output_prefix = escape_shell_arg(output_prefix);
 
     char cmd[2048];
-    
-    // Create command to render a single page using pdfimages
+
+    // old version
+    // snprintf(cmd, sizeof(cmd),
+    //          "pdfimages -all -f %d -l %d \"%s\" %s",
+    //          page_index + 1, page_index + 1,
+    //          pdf_path, output_prefix);
+    // new version
+    // Create command to render a single page using pdftoppm
     snprintf(cmd, sizeof(cmd), 
-             "pdfimages -all -f %d -l %d \"%s\" %s",
+             "pdftoppm -f %d -l %d -png \"%s\" %s",
              page_index + 1, page_index + 1, 
              pdf_path, output_prefix);
 
@@ -69,18 +75,14 @@ static char* extract_pdf_page(const char *pdf_path, int page_index, const char *
     if (!*success) {
         return NULL;
     }
-    
-    // Construct the expected output filename
-    char result_path[512];
-    snprintf(result_path, sizeof(result_path), "%s-000.jpg", output_prefix);
-    
+   
     // Check if the file exists
-    if (access(result_path, F_OK) != 0) {
+    if (access(expected_path, F_OK) != 0) {
         *success = false;
         return NULL;
     }
 
-    return strdup(result_path);
+    return strdup(expected_path);
 }
 
 ArchiveHandle* pdf_open(const char *path, int *total_images, ProgressCallback progress_cb) {
@@ -164,10 +166,10 @@ bool pdf_get_image(ArchiveHandle *handle, int index, char **out_path) {
     
     // Check for existing rendered file for this page
     char output_prefix[512];
-    snprintf(output_prefix, sizeof(output_prefix), "%s/page_%03d", handle->temp_dir, index + 1);
+    snprintf(output_prefix, sizeof(output_prefix), "%s/page", handle->temp_dir);
     
     char expected_path[512];
-    snprintf(expected_path, sizeof(expected_path), "%s-%d.png", output_prefix, page_index + 1);
+    snprintf(expected_path, sizeof(expected_path), "%s-%02d.png", output_prefix, page_index + 1);
     
     // Check if the file already exists
     if (access(expected_path, F_OK) == 0) {
@@ -177,7 +179,7 @@ bool pdf_get_image(ArchiveHandle *handle, int index, char **out_path) {
     
     // Render the page
     bool success = false;
-    char *result_path = extract_pdf_page(handle->path, page_index, output_prefix, &success);
+    char *result_path = extract_pdf_page(handle->path, page_index, output_prefix, expected_path, &success);
     
     if (!success || result_path == NULL) {
         fprintf(stderr, "Failed to render page %d\n", page_index + 1);
