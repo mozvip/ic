@@ -52,7 +52,7 @@ typedef struct ArchiveHandle {
     int *page_indices;          // Array of page indices (for PDF)
 } ArchiveHandle;
 
-#define MAX_IMAGES_PER_VIEW 10
+#define MAX_IMAGES_PER_VIEW 4
 
 typedef struct ImageView {
     int image_indices[MAX_IMAGES_PER_VIEW];  // Indices of images in this view
@@ -65,14 +65,12 @@ struct ViewerState {
     char *source_path;        // Path to the source
     ImageEntry images[MAX_IMAGES];  // Array of image entries
     int image_count;          // Number of images
-    int current_image;        // Current image index
-    int preloaded_image;      // Index of preloaded image (next image)
     SDL_Window *window;       // Main SDL window
     SDL_Renderer *renderer;   // SDL renderer
     int window_width;         // Window width
     int window_height;        // Window height
-    int drawable_width;      // Drawable width (for HiDPI)
-    int drawable_height;     // Drawable height (for HiDPI)
+    int drawable_width;       // Drawable width (for HiDPI)
+    int drawable_height;      // Drawable height (for HiDPI)
     bool running;             // Main loop control
     bool fullscreen;          // Fullscreen state
     TTF_Font *font;           // Font for rendering text
@@ -83,7 +81,7 @@ struct ViewerState {
     bool page_turning_enabled;              // Whether a page-turn animations are enabled
     bool page_turning_in_progress;  // Whether a page-turn animation is in progress
     float page_turn_progress; // Progress of the page-turn animation (0.0 to 1.0)
-    int target_image;         // The target image index for the page turn
+    int target_view;         // The target view index for the page turn
     int direction;          // Direction of the page turn (1 for next, -1 for previous)
 
     // Progress indicator display timer
@@ -92,12 +90,10 @@ struct ViewerState {
 
     // Multi-image display settings
     bool multiple_images_mode;     // Whether to display multiple images
-    int images_per_view;           // Number of images to display (typically 2)
     ImageView *views;              // Array of views
     int current_view;              // Current view index
     int view_count;                // Total number of views
     bool right_to_left;            // Reading direction (for manga)
-    bool auto_detect_spreads;      // Automatically detect two-page spreads
 };
 
 // Declare viewer as an extern variable of this struct type

@@ -28,19 +28,110 @@ struct ViewerState viewer; // Define the global viewer variable
 // Forward declarations for internal functions
 static void free_resources(void);
 static void handle_events(void);
-static void previous_page();
-static void next_page();
-static void render_current_image(void);
+static void render_current_view(void);
 static void display_info();
 static bool load_image(int index);
 static void unload_image(int index);
 static void toggle_fullscreen(void);
 static SDL_Color get_dominant_color(SDL_Surface *surface, int x, int y, int width, int height);
-static void analyze_image_edges(int index, SDL_Color *left_color, SDL_Color *right_color);
+static void analyze_image_left_edge(int index, SDL_Color *left_color);
+static void analyze_image_right_edge(int index, SDL_Color *right_color);
 static SDL_Texture* render_text(const char *text, SDL_Color color);
 static bool select_monitor(int monitor_index, int *x, int *y);
 static void create_high_quality_texture(SDL_Renderer *renderer, ImageEntry *image);
 static void update_progress(float progress, const char *message);
+static void generate_default_views(void);
+static void previous_view(void);
+static void next_view(void);
+
+// Helper function to convert RGB to HSL
+// r, g, b, s, l are in [0, 1], h is in [0, 360)
+static void rgb_to_hsl(float r, float g, float b, float *h, float *s, float *l) {
+    float max_val = fmaxf(fmaxf(r, g), b);
+    float min_val = fminf(fminf(r, g), b);
+    *l = (max_val + min_val) / 2.0f;
+
+    if (max_val == min_val) {
+        *h = 0; // achromatic
+        *s = 0;
+    } else {
+        float d = max_val - min_val;
+        *s = (*l > 0.5f) ? d / (2.0f - max_val - min_val) : d / (max_val + min_val);
+        if (max_val == r) {
+            *h = (g - b) / d + (g < b ? 6.0f : 0);
+        } else if (max_val == g) {
+            *h = (b - r) / d + 2.0f;
+        } else { // max_val == b
+            *h = (r - g) / d + 4.0f;
+        }
+        *h /= 6.0f;
+        *h *= 360.0f;
+    }
+}
+
+// Helper for hsl_to_rgb
+static float hue_to_rgb_component(float p, float q, float t) {
+    if (t < 0) t += 1.0f;
+    if (t > 1) t -= 1.0f;
+    if (t < 1.0f/6.0f) return p + (q - p) * 6.0f * t;
+    if (t < 1.0f/2.0f) return q;
+    if (t < 2.0f/3.0f) return p + (q - p) * (2.0f/3.0f - t) * 6.0f;
+    return p;
+}
+
+// Helper function to convert HSL to RGB
+// r, g, b, s, l are in [0, 1], h is in [0, 360)
+static void hsl_to_rgb(float h, float s, float l, float *r, float *g, float *b) {
+    if (s == 0) {
+        *r = *g = *b = l; // achromatic
+    } else {
+        float q = (l < 0.5f) ? l * (1.0f + s) : l + s - l * s;
+        float p = 2.0f * l - q;
+        float h_norm = h / 360.0f;
+        *r = hue_to_rgb_component(p, q, h_norm + 1.0f/3.0f);
+        *g = hue_to_rgb_component(p, q, h_norm);
+        *b = hue_to_rgb_component(p, q, h_norm - 1.0f/3.0f);
+    }
+}
+
+// Function to render a horizontal gradient using HSL interpolation
+static void render_horizontal_gradient_hsl(SDL_Renderer *renderer, SDL_FRect rect, SDL_Color edge_color_rgb, bool edge_color_is_on_left_of_fill) {
+    if (rect.w <= 0) return; // Do not render if width is zero or negative
+
+    float r_edge = edge_color_rgb.r / 255.0f;
+    float g_edge = edge_color_rgb.g / 255.0f;
+    float b_edge = edge_color_rgb.b / 255.0f;
+
+    float h_edge, s_edge, l_edge;
+    rgb_to_hsl(r_edge, g_edge, b_edge, &h_edge, &s_edge, &l_edge);
+
+    for (int col = 0; col < (int)rect.w; ++col) {
+        float t; // Interpolation factor: 0 for edge_color, 1 for black
+        if (edge_color_is_on_left_of_fill) { // Gradient from left (edge_color) to right (black)
+            t = (float)col / (float)(rect.w > 1 ? rect.w -1 : 1); // Avoid division by zero if rect.w is 1
+        } else { // Gradient from right (edge_color) to left (black)
+            t = 1.0f - ((float)col / (float)(rect.w > 1 ? rect.w -1 : 1));
+        }
+        // Clamp t to [0, 1] just in case
+        t = fmaxf(0.0f, fminf(1.0f, t));
+
+
+        // Interpolate S and L towards 0 (black), keep H constant
+        float s_interp = s_edge * (1.0f - t);
+        float l_interp = l_edge * (1.0f - t);
+
+        float r_interp, g_interp, b_interp;
+        hsl_to_rgb(h_edge, s_interp, l_interp, &r_interp, &g_interp, &b_interp);
+
+        SDL_SetRenderDrawColor(renderer,
+                               (Uint8)(r_interp * 255.0f),
+                               (Uint8)(g_interp * 255.0f),
+                               (Uint8)(b_interp * 255.0f),
+                               255);
+        SDL_RenderLine(renderer, rect.x + col, rect.y, rect.x + col, rect.y + rect.h -1.0f);
+    }
+}
+
 
 bool comic_viewer_init(int monitor_index) {
     // Set the video driver hint to Wayland before initializing SDL
@@ -52,7 +143,7 @@ bool comic_viewer_init(int monitor_index) {
     SDL_SetHint("SDL_WINDOW_ALLOW_HIGHDPI", "1");
     
     // Set best quality for scaling operations
-    SDL_SetHint("SDL_RENDER_SCALE_QUALITY", "2");  // 0=nearest, 1=linear, 2=anisotropic
+    SDL_SetHint("SDL_RENDER_SCALE_QUALITY", "2");  // 0=nearest, 1=linear, 2="best"
     
     // Initialize SDL
     if (!SDL_Init(SDL_INIT_VIDEO)) {
@@ -158,8 +249,7 @@ bool comic_viewer_init(int monitor_index) {
     viewer.type = SOURCE_UNKNOWN;
     viewer.source_path = NULL;
     viewer.image_count = 0;
-    viewer.current_image = 0;
-    viewer.preloaded_image = -1;
+    viewer.current_view = 0;
     viewer.running = false;
     viewer.fullscreen = false;
     viewer.archive = NULL;
@@ -196,10 +286,12 @@ bool comic_viewer_load(const char *path) {
         return false;
     }
 
+    bool result = false;
+
     // Determine source type
     if (S_ISDIR(path_stat.st_mode)) {
         viewer.type = SOURCE_DIRECTORY;
-        return load_directory(path, viewer.images, &viewer.image_count, MAX_IMAGES, update_progress);
+        result = load_directory(path, viewer.images, &viewer.image_count, MAX_IMAGES, update_progress);
     } else {
         // Check file extension to determine type
         size_t len = strlen(path);
@@ -208,22 +300,53 @@ bool comic_viewer_load(const char *path) {
             if (strcasecmp(ext, ".cbz") == 0 || strcasecmp(ext, ".zip") == 0) {
                 viewer.type = SOURCE_CBZ;
                 viewer.archive = archive_open(path, ARCHIVE_TYPE_CBZ, &viewer.image_count, update_progress);
-                return viewer.archive != NULL;
             } else if (strcasecmp(ext, ".cbr") == 0 || strcasecmp(ext, ".rar") == 0) {
                 viewer.type = SOURCE_CBR;
                 viewer.archive = archive_open(path, ARCHIVE_TYPE_CBR, &viewer.image_count, update_progress);
-                return viewer.archive != NULL;
             } else if (strcasecmp(ext, ".pdf") == 0) {
                 viewer.type = SOURCE_PDF;
                 viewer.archive = archive_open(path, ARCHIVE_TYPE_PDF, &viewer.image_count, update_progress);
-                return viewer.archive != NULL;
             }
+            result = viewer.archive != NULL;
         }
     }
 
-    update_progress(1.0f, "Unsupported file type");
-    fprintf(stderr, "Unsupported file type: %s\n", path);
-    return false;
+    if (result) {
+        // generate default views
+        generate_default_views();
+    } else {
+        update_progress(1.0f, "Could not load input");
+        // If we couldn't load the archive, check if it's a directory
+        if (viewer.type == SOURCE_DIRECTORY) {
+            free(viewer.source_path);
+            viewer.source_path = NULL;
+        }
+    }
+
+    return result;
+}
+
+void unload_images_for_view(int view_index) {
+    if (view_index < 0 || view_index >= viewer.view_count) return;
+
+    // Unload images for the specified view
+    for (int i = 0; i < viewer.views[view_index].count; i++) {
+        int img_index = viewer.views[view_index].image_indices[i];
+        unload_image(img_index);
+    }
+}
+
+void load_images_for_view(int view_index) {
+    if (view_index < 0 || view_index >= viewer.view_count) return;
+
+    // Load images for the current view
+    for (int i = 0; i < viewer.views[view_index].count; i++) {
+        int img_index = viewer.views[view_index].image_indices[i];
+        if (!load_image(img_index)) {
+            fprintf(stderr, "Failed to load image %d\n", img_index);
+            return;
+        }
+    }
 }
 
 void comic_viewer_run(void) {
@@ -232,18 +355,12 @@ void comic_viewer_run(void) {
         return;
     }
 
-    // Load the first image
-    if (!load_image(viewer.current_image)) {
-        fprintf(stderr, "Failed to load first image\n");
-        return;
+    // Load images for the current view
+    load_images_for_view(viewer.current_view);
+    // Preload images for the next view if available
+    if (viewer.view_count > 1) {
+        load_images_for_view(viewer.current_view + 1);
     }
-    
-    // Preload the next image if available
-    if (viewer.image_count > 1) {
-        load_image(viewer.current_image + 1);
-        viewer.preloaded_image = viewer.current_image + 1;
-    }
-
     viewer.running = true;
 
     // Main loop
@@ -252,7 +369,7 @@ void comic_viewer_run(void) {
         handle_events();
 
         // Render the current image
-        render_current_image();
+        render_current_view();
 
         // Delay to reduce CPU usage
         SDL_Delay(10);
@@ -341,13 +458,13 @@ static void handle_events(void) {
             case SDL_EVENT_QUIT:
                 viewer.running = false;
                 break;
-                
+
             case SDL_EVENT_MOUSE_WHEEL:
                 // Mouse wheel for page navigation
                 if (event.wheel.y > 0) {  // Scroll up
-                    previous_page();
+                    previous_view();
                 } else if (event.wheel.y < 0) {  // Scroll down
-                    next_page();
+                    next_view();
                 }
                 break;
                 
@@ -356,51 +473,69 @@ static void handle_events(void) {
                     case SDLK_ESCAPE:
                         viewer.running = false;
                         break;
+
+                    case SDLK_1:
+                        if (viewer.views[viewer.current_view].count == 1) {
+                            // This view is already in single image mode
+                            break;
+                        }
+                        // the current view now has 1 image
+                        viewer.views[viewer.current_view].count = 1;
+                        break;
+
+                    case SDLK_2:
+                        // the current view now has 2 images
+                        viewer.views[viewer.current_view].count = 2;
+                        // the first image of the next view is the second image of the current view
+                        viewer.views[viewer.current_view].image_indices[1] = viewer.views[viewer.current_view+1].image_indices[0];
+                        // ensure the image is loaded
+                        if (viewer.images[viewer.views[viewer.current_view].image_indices[1]].texture == NULL) {
+                            load_image(viewer.views[viewer.current_view].image_indices[1]);
+                        }
+                        break;
                         
                     case SDLK_RIGHT:
                     case SDLK_SPACE:
                     case SDLK_DOWN:
-                        next_page();
+                        next_view();
                         break;
                         
                     case SDLK_LEFT:
                     case SDLK_UP:
                     case SDLK_BACKSPACE:
-                        previous_page();
+                        previous_view();
                         break;
                         
                     case SDLK_HOME:
                         // First image
-                        if (viewer.current_image != 0) {
+                        if (viewer.current_view != 0) {
                             // Clean up any loaded textures except the first one
-                            for (int i = 1; i < viewer.image_count; i++) {
-                                unload_image(i);
+                            for (int i = 1; i < viewer.view_count; i++) {
+                                unload_images_for_view(i);
                             }
-                            viewer.current_image = 0;
-                            load_image(0);
-                            
+                            viewer.current_view = 0;
+                            load_images_for_view(viewer.current_view);
+
                             // Preload the next image
-                            if (viewer.image_count > 1) {
-                                load_image(1);
-                                viewer.preloaded_image = 1;
+                            if (viewer.view_count > 1) {
+                                load_images_for_view(viewer.current_view + 1);
                             }
                         }
                         break;
                         
                     case SDLK_END:
                         // Last image
-                        if (viewer.current_image != viewer.image_count - 1) {
+                        if (viewer.current_view != viewer.view_count - 1) {
                             // Clean up any loaded textures except the last one
-                            for (int i = 0; i < viewer.image_count - 1; i++) {
-                                unload_image(i);
+                            for (int i = 0; i < viewer.view_count - 1; i++) {
+                                unload_images_for_view(i);
                             }
-                            viewer.current_image = viewer.image_count - 1;
-                            load_image(viewer.current_image);
-                            
+                            viewer.current_view = viewer.view_count - 1;
+                            load_images_for_view(viewer.current_view);
+
                             // Preload the previous image
-                            if (viewer.image_count > 1) {
-                                load_image(viewer.image_count - 2);
-                                viewer.preloaded_image = viewer.image_count - 2;
+                            if (viewer.view_count > 1) {
+                                load_images_for_view(viewer.current_view - 1);
                             }
                         }
                         break;
@@ -435,86 +570,20 @@ static void handle_events(void) {
                 
             case SDL_EVENT_WINDOW_EXPOSED:
                 // Window needs to be redrawn
-                render_current_image();
+                render_current_view();
                 break;
         }
     }
 }
 
-void next_page()
-{
-    if (viewer.current_image == viewer.image_count - 1 || viewer.page_turning_in_progress) {
-        return;
-    }
-    if (viewer.current_image > 0)
-    {
-        unload_image(viewer.current_image - 1); // Unload previous image to save memory
-    }
-
-    // Update the page change timer
-    viewer.last_page_change_time = SDL_GetTicks();
-    viewer.show_progress_indicator = true;
-
-    if (viewer.page_turning_enabled){
-        viewer.target_image = viewer.current_image + 1;
-        viewer.page_turning_enabled = true;
-        viewer.page_turn_progress = 0.0f;
-        viewer.direction = 1; // Set direction for page turn animation
-    
-        // Note: No need to explicitly load the image here as it should already be preloaded
-    
-        // Start preloading the next image if available
-        if (viewer.current_image < viewer.image_count - 1)
-        {
-            load_image(viewer.current_image + 1);
-            viewer.preloaded_image = viewer.current_image + 1;
-        }
-    } else {
-        viewer.current_image++;
-        load_image(viewer.current_image);
-    }
-}
-
-void previous_page()
-{
-    if (viewer.current_image == 0  || viewer.page_turning_in_progress) {
-        return;
-    }
-    if (viewer.current_image < viewer.image_count - 1)
-    {
-        unload_image(viewer.current_image + 1);
-    }
-
-    // Update the page change timer
-    viewer.last_page_change_time = SDL_GetTicks();
-    viewer.show_progress_indicator = true;
-
-    if (viewer.page_turning_enabled){
-        viewer.target_image = viewer.current_image - 1;
-        viewer.page_turning_enabled = true;
-        viewer.page_turn_progress = 0.0f;
-        viewer.direction = -1; // Set direction for page turn animation
-
-        // Preload the previous image for faster backward navigation
-        if (viewer.current_image > 0)
-        {
-            load_image(viewer.current_image - 1);
-            viewer.preloaded_image = viewer.current_image - 1;
-        }
-    } else {
-        viewer.current_image--;
-        load_image(viewer.current_image);
-    }
-}
-
-static void render_current_image(void) {
+static void render_current_view(void) {
     // Clear the screen with black background
     SDL_SetRenderDrawColor(viewer.renderer, 0, 0, 0, 255);
     SDL_RenderClear(viewer.renderer);
 
     if (viewer.page_turning_in_progress) {
-        ImageEntry *current_img = &viewer.images[viewer.current_image];
-        ImageEntry *next_img = &viewer.images[viewer.target_image];
+        ImageEntry *current_img = &viewer.images[viewer.current_view];
+        ImageEntry *next_img = &viewer.images[viewer.target_view];
 
         // Ensure both textures are loaded
         if (!current_img->texture || !next_img->texture) {
@@ -564,47 +633,85 @@ static void render_current_image(void) {
         if (viewer.page_turn_progress >= 1.0f) {
             // Animation complete
             viewer.page_turning_in_progress = false;
-            viewer.current_image = viewer.target_image;
+            viewer.current_view = viewer.target_view;
         }
     } else {
         // Normal rendering
-        // Render the current image
-        ImageEntry *img = &viewer.images[viewer.current_image];
-        if (img->texture) {
-            // Calculate scaling to fit in the window while maintaining aspect ratio
-            float scale_x = (float)viewer.window_width / img->width;
-            float scale_y = (float)viewer.window_height / img->height;
-            float scale = (scale_x < scale_y) ? scale_x : scale_y;
-            
-            // For best quality, calculate dimensions with minimal rounding errors
-            int scaled_width = (int)(img->width * scale);
-            int scaled_height = (int)(img->height * scale);
-            
-            // Center the image
-            int x = (viewer.window_width - scaled_width) / 2;
-            int y = (viewer.window_height - scaled_height) / 2;
-            
-            SDL_Color left_color, right_color;
-            analyze_image_edges(viewer.current_image, &left_color, &right_color);
-            
-            // Draw left side background with the dominant color from the left edge
-            SDL_SetRenderDrawColor(viewer.renderer, left_color.r, left_color.g, left_color.b, 255);
-            SDL_FRect left_rect = {0, 0, (float)x, (float)viewer.window_height};
-            SDL_RenderFillRect(viewer.renderer, &left_rect);
-            
-            // Draw right side background with the dominant color from the right edge
-            SDL_SetRenderDrawColor(viewer.renderer, right_color.r, right_color.g, right_color.b, 255);
-            SDL_FRect right_rect = {(float)(x + scaled_width), 0, 
-                                   (float)(viewer.window_width - x - scaled_width), 
-                                   (float)viewer.window_height};
-            SDL_RenderFillRect(viewer.renderer, &right_rect);
-            
-            // Draw the image with high-quality rendering
-            SDL_FRect dest_rect = {(float)x, (float)y, (float)scaled_width, (float)scaled_height};
-            
-            // Use high-quality rendering with a specific blend mode for better results
-            SDL_SetTextureBlendMode(img->texture, SDL_BLENDMODE_NONE);
-            SDL_RenderTexture(viewer.renderer, img->texture, &img->crop_rect, &dest_rect);
+        ImageView *current_display_view = &viewer.views[viewer.current_view];
+        int num_images_in_this_view = current_display_view->count;
+
+        float display_area_width = (float)viewer.drawable_width;
+        float display_area_height = (float)viewer.drawable_height;
+        float slot_width_float = display_area_width / num_images_in_this_view;
+
+        float overall_content_start_x = display_area_width; // Initialize to max
+        float overall_content_end_x = 0.0f;                 // Initialize to min
+        bool any_image_rendered = false;
+
+        SDL_Color left_gradient_color, right_gradient_color;
+
+        for (int i = 0; i < num_images_in_this_view; i++) {
+
+            int image_idx = current_display_view->image_indices[i];
+            if (image_idx < 0 || image_idx >= viewer.image_count) continue; // Bounds check
+
+            ImageEntry *img = &viewer.images[image_idx];
+
+            if (img->texture && img->width > 0 && img->height > 0) {
+                any_image_rendered = true;
+                // Calculate scaling to fit in the image's "slot" while maintaining aspect ratio
+                float scale_x_slot = slot_width_float / img->width;
+                float scale_y_slot = display_area_height / img->height;
+                float scale = (scale_x_slot < scale_y_slot) ? scale_x_slot : scale_y_slot;
+                if (scale <= 1e-6f) scale = 1e-6f; // Prevent zero or negative scale
+
+                int scaled_width = (int)(img->width * scale);
+                int scaled_height = (int)(img->height * scale);
+                if (scaled_width <= 0) scaled_width = 1; // Ensure positive dimensions
+                if (scaled_height <= 0) scaled_height = 1;
+
+                // Calculate X position for this image within its slot
+                float current_slot_start_x = i * slot_width_float;
+                // Center the image horizontally in its slot
+                int x_pos_render = (int)(current_slot_start_x + (slot_width_float - scaled_width) / 2.0f);
+                // Center the image vertically in the window
+                int y_pos_render = (int)((display_area_height - scaled_height) / 2.0f);
+
+                // Update overall content extents
+                if ((float)x_pos_render < overall_content_start_x) {
+                    overall_content_start_x = (float)x_pos_render;
+                }
+                if ((float)(x_pos_render + scaled_width) > overall_content_end_x) {
+                    overall_content_end_x = (float)(x_pos_render + scaled_width);
+                }
+
+                if (i == 0) {
+                    // Analyze the left edge of the first image
+                    analyze_image_left_edge(image_idx, &left_gradient_color);
+                } else if (i == num_images_in_this_view - 1) {
+                    // Analyze the right edge of the last image
+                    analyze_image_right_edge(image_idx, &right_gradient_color);
+                }
+
+                SDL_FRect dest_rect = {(float)x_pos_render, (float)y_pos_render, (float)scaled_width, (float)scaled_height};
+                // SDL_SetTextureBlendMode(img->texture, SDL_BLENDMODE_NONE);
+                SDL_RenderTexture(viewer.renderer, img->texture, &img->crop_rect, &dest_rect);
+            }
+        }
+
+        // Draw side gradients based on the actual rendered content area
+        if (any_image_rendered) {
+            SDL_FRect left_rect_gradient = {0, 0, overall_content_start_x, display_area_height};
+            if (left_rect_gradient.w > 0.5f) { // Use a small threshold for float comparison
+                render_horizontal_gradient_hsl(viewer.renderer, left_rect_gradient, left_gradient_color, false);
+            }
+
+            SDL_FRect right_rect_gradient = {overall_content_end_x, 0,
+                                     display_area_width - overall_content_end_x,
+                                     display_area_height};
+            if (right_rect_gradient.w > 0.5f) {
+                render_horizontal_gradient_hsl(viewer.renderer, right_rect_gradient, right_gradient_color, true);
+            }
         }
     }
     
@@ -626,7 +733,7 @@ void display_info()
     // Only show progress indicator for 2 seconds (2000 ms) after a page change
     if (elapsed_time <= 2000) {
         // Calculate progress as a value between 0.0 and 1.0
-        float progress = (float)viewer.current_image / (float)(viewer.image_count - 1);
+        float progress = (float)viewer.current_view / (float)(viewer.view_count - 1);
         
         // Circle properties
         int radius = 40;
@@ -638,8 +745,8 @@ void display_info()
                 
         // Display page number and total
         char info_text[32];
-        snprintf(info_text, sizeof(info_text), "%d / %d", viewer.current_image + 1, viewer.image_count);
-        
+        snprintf(info_text, sizeof(info_text), "%d / %d", viewer.current_view + 1, viewer.view_count);
+
         SDL_Texture *text_texture = render_text(info_text, white);
         if (text_texture) {
             float text_width, text_height;
@@ -832,20 +939,25 @@ static SDL_Color get_dominant_color(SDL_Surface *surface, int x, int y, int widt
     return dominant;
 }
 
-// This function analyzes the image and extracts the dominant colors from the edges
-static void analyze_image_edges(int index, SDL_Color *left_color, SDL_Color *right_color) {
+// This function analyzes the image and extracts the dominant color from the left edge
+static void analyze_image_left_edge(int index, SDL_Color *left_color) {
     // Default to black if something goes wrong
     *left_color = (SDL_Color){0, 0, 0, 255};
-    *right_color = (SDL_Color){0, 0, 0, 255};
     
     // Basic validation
     if (index < 0 || index >= viewer.image_count || !viewer.images[index].path) return;
     
-    // Load the image as a surface for analysis, we need to do this even if texture is loaded
-    // since we can't easily access pixel data from textures
     SDL_Surface *surface = viewer.images[index].surface;
     if (!surface) {
-        fprintf(stderr, "Failed to load image for analysis: %s\n", SDL_GetError());
+        // Attempt to load surface if not already loaded (e.g., if only texture was created directly)
+        // This might happen if create_high_quality_texture was called but surface was freed or not kept.
+        // For robust edge analysis, the surface is needed.
+        // However, typically, create_high_quality_texture should keep the surface if analysis is needed.
+        // If it's critical and surface is often NULL here, load_image might need to ensure surface is populated.
+        // For now, assume surface should be available if image is loaded.
+        fprintf(stderr, "Failed to get surface for left edge analysis (image %d): Surface is NULL.\n", index);
+        // We could try IMG_Load here again if viewer.images[index].path is valid,
+        // but that implies a design issue if it's not kept.
         return;
     }
     
@@ -856,9 +968,34 @@ static void analyze_image_edges(int index, SDL_Color *left_color, SDL_Color *rig
     // Sample pixels from the left edge (8% of width)
     int edge_width = width * 0.08;
     if (edge_width < 1) edge_width = 1;
+    if (edge_width > width) edge_width = width; // Cap at image width
 
     // Get dominant color from left edge
     *left_color = get_dominant_color(surface, 0, 0, edge_width, height);
+}
+
+// This function analyzes the image and extracts the dominant color from the right edge
+static void analyze_image_right_edge(int index, SDL_Color *right_color) {
+    // Default to black if something goes wrong
+    *right_color = (SDL_Color){0, 0, 0, 255};
+
+    // Basic validation
+    if (index < 0 || index >= viewer.image_count || !viewer.images[index].path) return;
+
+    SDL_Surface *surface = viewer.images[index].surface;
+    if (!surface) {
+        fprintf(stderr, "Failed to get surface for right edge analysis (image %d): Surface is NULL.\n", index);
+        return;
+    }
+
+    // Get image dimensions
+    int width = surface->w;
+    int height = surface->h;
+
+    // Sample pixels from the right edge (8% of width)
+    int edge_width = width * 0.08;
+    if (edge_width < 1) edge_width = 1;
+    if (edge_width > width) edge_width = width; // Cap at image width
     
     // Get dominant color from right edge
     *right_color = get_dominant_color(surface, width - edge_width, 0, edge_width, height);
@@ -1108,6 +1245,34 @@ static void update_progress(float progress, const char *message) {
     progress_bar_update(progress, message);
 }
 
+void previous_view() {
+    if (viewer.current_view == 0 || viewer.page_turning_in_progress) {
+        return;
+    }
+
+    // Update the page change timer
+    viewer.last_page_change_time = SDL_GetTicks();
+    viewer.show_progress_indicator = true;
+    
+    // Unload current_viewbb images
+    for (int i = 0; i < viewer.views[viewer.current_view].count; i++) {
+        int img_idx = viewer.views[viewer.current_view].image_indices[i];
+        unload_image(img_idx);
+    }
+
+    // Move to previous view
+    viewer.current_view--;
+    if (viewer.current_view < 0) {
+        viewer.current_view = 0; // Ensure we don't go out of bounds
+    }
+    // Preload the previous image if available
+    for (int i = 0; i < viewer.views[viewer.current_view].count; i++) {
+        int img_idx = viewer.views[viewer.current_view].image_indices[i];
+        load_image(img_idx);
+    }
+}
+
+
 void next_view() {
     if (viewer.current_view == viewer.view_count - 1 || viewer.page_turning_in_progress) {
         return;
@@ -1133,7 +1298,7 @@ void next_view() {
     }
 }
 
-void generate_default_views() {
+static void generate_default_views() {
     // Clear any existing views
     if (viewer.views) {
         free(viewer.views);
@@ -1151,39 +1316,10 @@ void generate_default_views() {
     
     while (i < viewer.image_count) {
         ImageView *view = &viewer.views[viewer.view_count];
-        view->count = 0;
-
-        // Determine if this is a spread
-        bool is_spread = false;
-        if (viewer.auto_detect_spreads && i < viewer.image_count - 1) {
-            // Check if this image is part of a spread (e.g., by aspect ratio)
-            // If width > height * 0.8, it might be part of a spread
-            float aspect1 = (float)viewer.images[i].width / viewer.images[i].height;
-            float aspect2 = (float)viewer.images[i+1].width / viewer.images[i+1].height;
-
-            if (aspect1 < 0.8 && aspect2 < 0.8) {
-                is_spread = true;
-            }
-        }
-        
-        if (is_spread && viewer.multiple_images_mode) {
-            // Add both images to this view
-            if (viewer.right_to_left) {
-                view->image_indices[0] = i + 1;  // Right page
-                view->image_indices[1] = i;      // Left page
-            } else {
-                view->image_indices[0] = i;      // Left page
-                view->image_indices[1] = i + 1;  // Right page
-            }
-            view->count = 2;
-            i += 2;
-        } else {
-            // Single image view
-            view->image_indices[0] = i;
-            view->count = 1;
-            i++;
-        }
-        
+        // Single image view by default
+        view->image_indices[0] = i;
+        view->count = 1;
+        i++;
         viewer.view_count++;
     }
 }

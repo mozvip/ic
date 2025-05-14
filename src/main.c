@@ -52,18 +52,18 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    int return_value = 0;
     // Load the comic or directory
-    if (!comic_viewer_load(path)) {
+    if (comic_viewer_load(path)) {
+        // Run the main loop
+        comic_viewer_run();
+    } else {
         fprintf(stderr, "Failed to load: %s\n", path);
-        comic_viewer_cleanup();
-        return 1;
+        return_value = 1;
     }
-
-    // Run the main loop
-    comic_viewer_run();
 
     // Clean up
     comic_viewer_cleanup();
 
-    return 0;
+    return return_value;
 }

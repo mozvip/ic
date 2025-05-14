@@ -17,6 +17,8 @@
 extern int image_name_compare(const void *a, const void *b);
 extern const char* get_filename_from_path(const char* path);
 
+const int PDF_PIXEL_DENSITY = 120; // DPI for PDF rendering
+
 // Get PDF page count using pdfinfo (part of poppler-utils)
 static int get_pdf_page_count(const char *path) {
     char *escaped_path = escape_shell_arg(path);
@@ -59,8 +61,8 @@ static char* extract_pdf_page(const char *pdf_path, int page_index, const char *
     // new version
     // Create command to render a single page using pdftoppm
     snprintf(cmd, sizeof(cmd), 
-             "pdftoppm -f %d -l %d -png \"%s\" %s",
-             page_index + 1, page_index + 1, 
+             "pdftoppm -r %d -f %d -l %d -jpeg \"%s\" %s",
+             PDF_PIXEL_DENSITY, page_index + 1, page_index + 1,
              pdf_path, output_prefix);
 
     // Execute the command
@@ -169,7 +171,7 @@ bool pdf_get_image(ArchiveHandle *handle, int index, char **out_path) {
     snprintf(output_prefix, sizeof(output_prefix), "%s/page", handle->temp_dir);
     
     char expected_path[512];
-    snprintf(expected_path, sizeof(expected_path), "%s-%02d.png", output_prefix, page_index + 1);
+    snprintf(expected_path, sizeof(expected_path), "%s-%02d.jpg", output_prefix, page_index + 1);
     
     // Check if the file already exists
     if (access(expected_path, F_OK) == 0) {
