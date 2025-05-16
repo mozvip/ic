@@ -484,13 +484,20 @@ static void handle_events(void) {
                         break;
 
                     case SDLK_2:
-                        // the current view now has 2 images
-                        viewer.views[viewer.current_view].count = 2;
-                        // the first image of the next view is the second image of the current view
-                        viewer.views[viewer.current_view].image_indices[1] = viewer.views[viewer.current_view+1].image_indices[0];
-                        // ensure the image is loaded
-                        if (viewer.images[viewer.views[viewer.current_view].image_indices[1]].texture == NULL) {
-                            load_image(viewer.views[viewer.current_view].image_indices[1]);
+                        if (viewer.views[viewer.current_view].count == 2) {
+                            // This view is already in double image mode
+                            break;
+                        }
+                        // check if we are not already displaying the last image
+                        if (viewer.current_view < viewer.view_count - 1) {
+                            // the current view now has 2 images
+                            viewer.views[viewer.current_view].count = 2;
+                            // the first image of the next view is the second image of the current view
+                            viewer.views[viewer.current_view].image_indices[1] = viewer.views[viewer.current_view+1].image_indices[0];
+                            // ensure the image is loaded
+                            if (viewer.images[viewer.views[viewer.current_view].image_indices[1]].texture == NULL) {
+                                load_image(viewer.views[viewer.current_view].image_indices[1]);
+                            }
                         }
                         break;
                         
@@ -659,10 +666,9 @@ static void render_current_view(void) {
 
             if (img->texture && img->width > 0 && img->height > 0) {
                 any_image_rendered = true;
-                // Calculate scaling to fit in the image's "slot" while maintaining aspect ratio
-                float scale_x_slot = slot_width_float / img->width;
-                float scale_y_slot = display_area_height / img->height;
-                float scale = (scale_x_slot < scale_y_slot) ? scale_x_slot : scale_y_slot;
+                // First pass: calculate height-based scaling for all images
+                float scale_y = display_area_height / img->height;
+                float scale = scale_y; // Scale based on height only
                 if (scale <= 1e-6f) scale = 1e-6f; // Prevent zero or negative scale
 
                 int scaled_width = (int)(img->width * scale);
@@ -670,10 +676,37 @@ static void render_current_view(void) {
                 if (scaled_width <= 0) scaled_width = 1; // Ensure positive dimensions
                 if (scaled_height <= 0) scaled_height = 1;
 
-                // Calculate X position for this image within its slot
-                float current_slot_start_x = i * slot_width_float;
-                // Center the image horizontally in its slot
-                int x_pos_render = (int)(current_slot_start_x + (slot_width_float - scaled_width) / 2.0f);
+                // Calculate X position - images are placed directly next to each other
+                float x_pos_render;
+                if (i == 0) {
+                    // First image is centered in the window
+                    float total_width = 0;
+                    for (int j = 0; j < num_images_in_this_view; j++) {
+                        int idx = current_display_view->image_indices[j];
+                        if (idx >= 0 && idx < viewer.image_count && 
+                            viewer.images[idx].texture && 
+                            viewer.images[idx].width > 0 && 
+                            viewer.images[idx].height > 0) {
+                            total_width += viewer.images[idx].width * scale_y;
+                        }
+                    }
+                    // Center the entire group of images
+                    x_pos_render = (display_area_width - total_width) / 2.0f;
+                } else {
+                    // Subsequent images are placed directly after the previous image
+                    int prev_img_idx = current_display_view->image_indices[i-1];
+                    if (prev_img_idx >= 0 && prev_img_idx < viewer.image_count && 
+                        viewer.images[prev_img_idx].texture) {
+                        ImageEntry *prev_img = &viewer.images[prev_img_idx];
+                        float prev_scaled_width = prev_img->width * scale_y;
+                        // Get the previous image's position from the overall_content_end_x
+                        x_pos_render = overall_content_end_x;
+                    } else {
+                        // Fallback if previous image isn't available
+                        x_pos_render = (i * display_area_width) / num_images_in_this_view;
+                    }
+                }
+                
                 // Center the image vertically in the window
                 int y_pos_render = (int)((display_area_height - scaled_height) / 2.0f);
 
@@ -688,7 +721,9 @@ static void render_current_view(void) {
                 if (i == 0) {
                     // Analyze the left edge of the first image
                     analyze_image_left_edge(image_idx, &left_gradient_color);
-                } else if (i == num_images_in_this_view - 1) {
+                }
+                
+                if (i == (num_images_in_this_view - 1)) {
                     // Analyze the right edge of the last image
                     analyze_image_right_edge(image_idx, &right_gradient_color);
                 }
