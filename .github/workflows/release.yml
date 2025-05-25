@@ -1,0 +1,61 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Dependencies
+        run: |
+          sudo apt-get -y update
+          sudo apt-get -y install build-essential make libzip-dev libcurl4-openssl-dev libexif-dev libxinerama-dev
+      
+      - name: Build Release Binaries
+        run: |
+          # Build with all features enabled
+          make curl=1 exif=1 inotify=1 verscmp=1 xinerama=1
+          mv ic ic-full
+          make clean
+          
+          # Build minimal version
+          make curl=0 exif=0 inotify=0 verscmp=0 xinerama=0
+          mv ic ic-minimal
+          make clean
+      
+      - name: Create Release Archive
+        run: |
+          mkdir -p release
+          cp ic-full release/
+          cp ic-minimal release/
+          cp README.md release/ 2>/dev/null || echo "README.md not found"
+          cp LICENSE release/ 2>/dev/null || echo "LICENSE not found"
+          tar -czf ic-${{ github.ref_name }}-linux.tar.gz -C release .
+      
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            ic-${{ github.ref_name }}-linux.tar.gz
+          body: |
+            Release ${{ github.ref_name }}
+            
+            ## Binaries included:
+            - `ic-full`: Built with all features (curl, exif, inotify, verscmp, xinerama)
+            - `ic-minimal`: Built with minimal features
+            
+            ## Installation:
+            ```bash
+            tar -xzf ic-${{ github.ref_name }}-linux.tar.gz
+            chmod +x ic-full ic-minimal
+            ```
+          draft: false
+          prerelease: ${{ contains(github.ref_name, 'rc') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,23 +1,40 @@
-name: C/C++ CI
+name: linux
 
 on:
   push:
-    branches: [ "main" ]
+    branches:
+      - '*'
   pull_request:
-    branches: [ "main" ]
+    branches:
+      - '*'
 
 jobs:
-  build:
-
+  c:
     runs-on: ubuntu-latest
 
+    strategy:
+      matrix:
+        curl: [0, 1]
+        exif: [0, 1]
+        xinerama: [0, 1]
+
     steps:
-    - uses: actions/checkout@v4
-    - name: configure
-      run: ./configure
-    - name: make
-      run: make
-    - name: make check
-      run: make check
-    - name: make distcheck
-      run: make distcheck
+      - uses: actions/checkout@v4
+      - name: APT
+        run: sudo apt-get -y update
+      - name: Install Dependencies
+        run: |
+          sudo apt-get -y install build-essential make libzip-dev
+          # Install SDL3 and TTF dependencies for progress bar
+          sudo apt-get -y install libsdl2-dev libsdl2-ttf-dev || echo "SDL2 fallback"
+      - name: Install libcurl
+        if: matrix.curl
+        run: sudo apt-get -y install libcurl4-openssl-dev
+      - name: Install libexif
+        if: matrix.exif
+        run: sudo apt-get -y install libexif-dev
+      - name: Install Xinerama
+        if: matrix.xinerama
+        run: sudo apt-get -y install libxinerama-dev
+      - name: Build and Test
+        run: for inotify in 0 1; do for verscmp in 0 1; do make curl=${{ matrix.curl }} exif=${{ matrix.exif }} inotify=$inotify verscmp=$verscmp xinerama=${{ matrix.xinerama }} && make test && make clean; done; done
