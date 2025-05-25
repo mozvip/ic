@@ -38,7 +38,7 @@ static void analyze_image_left_edge(int index, SDL_Color *left_color);
 static void analyze_image_right_edge(int index, SDL_Color *right_color);
 static SDL_Texture* render_text(const char *text, SDL_Color color);
 static bool select_monitor(int monitor_index, int *x, int *y);
-static void create_high_quality_texture(SDL_Renderer *renderer, ImageEntry *image);
+static void create_texture(SDL_Renderer *renderer, ImageEntry *image);
 static void update_progress(float progress, const char *message);
 static void generate_default_views(void);
 static void previous_view(void);
@@ -258,6 +258,13 @@ bool comic_viewer_init(int monitor_index) {
     viewer.last_page_change_time = 0;
     viewer.show_progress_indicator = false;
 
+    // Initialize zoom settings
+    viewer.zoom_level = 1.0f;
+    viewer.zoomed = false;
+    viewer.zoom_center_x = 0;
+    viewer.zoom_center_y = 0;
+    viewer.max_zoom = 3.0f;
+
     for (int i = 0; i < MAX_IMAGES; i++) {
         viewer.images[i].path = NULL;
         viewer.images[i].surface = NULL;
@@ -406,7 +413,7 @@ static bool load_image(int index) {
             viewer.images[index].path = image_path;
             
             // Load the image using our high-quality scaling function
-            create_high_quality_texture(viewer.renderer, &viewer.images[index]);
+            create_texture(viewer.renderer, &viewer.images[index]);
             if (!viewer.images[index].texture) {
                 fprintf(stderr, "Failed to load image %s: %s\n", image_path, SDL_GetError());
                 return false;
@@ -420,7 +427,7 @@ static bool load_image(int index) {
         return false;
     } else {
         // Standard loading mode
-        create_high_quality_texture(viewer.renderer, &viewer.images[index]);
+        create_texture(viewer.renderer, &viewer.images[index]);
         if (!viewer.images[index].texture) {
             fprintf(stderr, "Failed to load image %s: %s\n", 
                     viewer.images[index].path, SDL_GetError());
@@ -465,6 +472,22 @@ static void handle_events(void) {
                     previous_view();
                 } else if (event.wheel.y < 0) {  // Scroll down
                     next_view();
+                }
+                break;
+                
+            case SDL_EVENT_MOUSE_BUTTON_DOWN:
+                if (event.button.button == SDL_BUTTON_LEFT) {
+                    // Left mouse button pressed - toggle zoom
+                    if (viewer.zoomed) {
+                        // If already zoomed, return to normal view
+                        viewer.zoomed = false;
+                    } else {
+                        // Zoom in with center at click location
+                        viewer.zoomed = true;
+                        viewer.zoom_center_x = event.button.x;
+                        viewer.zoom_center_y = event.button.y;
+                        viewer.zoom_level = 2.0f; // Set zoom level to 200%
+                    }
                 }
                 break;
                 
@@ -555,6 +578,40 @@ static void handle_events(void) {
                     case SDLK_F12:
                         // Toggle fullscreen with F12 key
                         toggle_fullscreen();
+                        break;
+                        
+                    // Zoom controls
+                    case SDLK_EQUALS: // Plus key (often requires shift)
+                    case SDLK_KP_PLUS: // Numpad plus
+                        if (viewer.zoomed) {
+                            // Increase zoom level
+                            viewer.zoom_level += 0.25f;
+                            if (viewer.zoom_level > viewer.max_zoom)
+                                viewer.zoom_level = viewer.max_zoom;
+                        }
+                        break;
+                        
+                    case SDLK_MINUS:
+                    case SDLK_KP_MINUS: // Numpad minus
+                        if (viewer.zoomed) {
+                            // Decrease zoom level
+                            viewer.zoom_level -= 0.25f;
+                            if (viewer.zoom_level < 1.0f) {
+                                // Exit zoom mode if we go below 100%
+                                viewer.zoomed = false;
+                                viewer.zoom_level = 1.0f;
+                            }
+                        }
+                        break;
+                        
+                    case SDLK_Z: // Toggle zoom mode
+                        viewer.zoomed = !viewer.zoomed;
+                        if (viewer.zoomed) {
+                            // When entering zoom mode with keyboard, center on the middle of the window
+                            viewer.zoom_center_x = viewer.window_width / 2;
+                            viewer.zoom_center_y = viewer.window_height / 2;
+                            viewer.zoom_level = 2.0f;
+                        }
                         break;
                 }
                 break;
@@ -649,26 +706,41 @@ static void render_current_view(void) {
 
         float display_area_width = (float)viewer.drawable_width;
         float display_area_height = (float)viewer.drawable_height;
-        float slot_width_float = display_area_width / num_images_in_this_view;
 
         float overall_content_start_x = display_area_width; // Initialize to max
         float overall_content_end_x = 0.0f;                 // Initialize to min
         bool any_image_rendered = false;
 
         SDL_Color left_gradient_color, right_gradient_color;
+        
+        // Prepare for zoomed view calculations
+        float scale_multiplier = 1.0f;
+        float viewport_offset_x = 0.0f;
+        float viewport_offset_y = 0.0f;
+        
+        // If zoomed, calculate the offset and scale
+        if (viewer.zoomed) {
+            scale_multiplier = viewer.zoom_level;
 
+
+        }
+        
+        // Now do the actual rendering
         for (int i = 0; i < num_images_in_this_view; i++) {
-
             int image_idx = current_display_view->image_indices[i];
-            if (image_idx < 0 || image_idx >= viewer.image_count) continue; // Bounds check
 
             ImageEntry *img = &viewer.images[image_idx];
-
             if (img->texture && img->width > 0 && img->height > 0) {
                 any_image_rendered = true;
-                // First pass: calculate height-based scaling for all images
-                float scale_y = display_area_height / img->height;
-                float scale = scale_y; // Scale based on height only
+                
+                // Calculate scaling - adjusted for zoom if needed
+                float base_scale_y = display_area_height / img->height;
+                float scale = base_scale_y;
+                
+                if (viewer.zoomed) {
+                    scale = base_scale_y * scale_multiplier;
+                }
+                
                 if (scale <= 1e-6f) scale = 1e-6f; // Prevent zero or negative scale
 
                 int scaled_width = (int)(img->width * scale);
@@ -676,8 +748,12 @@ static void render_current_view(void) {
                 if (scaled_width <= 0) scaled_width = 1; // Ensure positive dimensions
                 if (scaled_height <= 0) scaled_height = 1;
 
-                // Calculate X position - images are placed directly next to each other
+                // Calculate positions
                 float x_pos_render;
+                float y_pos_render;
+                
+                // Normal (non-zoomed) positioning
+                // First pass: calculate height-based scaling for all images
                 if (i == 0) {
                     // First image is centered in the window
                     float total_width = 0;
@@ -687,35 +763,25 @@ static void render_current_view(void) {
                             viewer.images[idx].texture && 
                             viewer.images[idx].width > 0 && 
                             viewer.images[idx].height > 0) {
-                            total_width += viewer.images[idx].width * scale_y;
+                            total_width += viewer.images[idx].width * base_scale_y;
                         }
                     }
                     // Center the entire group of images
                     x_pos_render = (display_area_width - total_width) / 2.0f;
                 } else {
                     // Subsequent images are placed directly after the previous image
-                    int prev_img_idx = current_display_view->image_indices[i-1];
-                    if (prev_img_idx >= 0 && prev_img_idx < viewer.image_count && 
-                        viewer.images[prev_img_idx].texture) {
-                        ImageEntry *prev_img = &viewer.images[prev_img_idx];
-                        float prev_scaled_width = prev_img->width * scale_y;
-                        // Get the previous image's position from the overall_content_end_x
-                        x_pos_render = overall_content_end_x;
-                    } else {
-                        // Fallback if previous image isn't available
-                        x_pos_render = (i * display_area_width) / num_images_in_this_view;
-                    }
+                    x_pos_render = overall_content_end_x;
                 }
                 
                 // Center the image vertically in the window
-                int y_pos_render = (int)((display_area_height - scaled_height) / 2.0f);
+                y_pos_render = (display_area_height - scaled_height) / 2.0f;
 
                 // Update overall content extents
-                if ((float)x_pos_render < overall_content_start_x) {
-                    overall_content_start_x = (float)x_pos_render;
+                if (x_pos_render < overall_content_start_x) {
+                    overall_content_start_x = x_pos_render;
                 }
-                if ((float)(x_pos_render + scaled_width) > overall_content_end_x) {
-                    overall_content_end_x = (float)(x_pos_render + scaled_width);
+                if (x_pos_render + scaled_width > overall_content_end_x) {
+                    overall_content_end_x = x_pos_render + scaled_width;
                 }
 
                 if (i == 0) {
@@ -728,13 +794,11 @@ static void render_current_view(void) {
                     analyze_image_right_edge(image_idx, &right_gradient_color);
                 }
 
-                SDL_FRect dest_rect = {(float)x_pos_render, (float)y_pos_render, (float)scaled_width, (float)scaled_height};
-                // SDL_SetTextureBlendMode(img->texture, SDL_BLENDMODE_NONE);
+                SDL_FRect dest_rect = {x_pos_render, y_pos_render, (float)scaled_width, (float)scaled_height};
                 SDL_RenderTexture(viewer.renderer, img->texture, &img->crop_rect, &dest_rect);
             }
         }
 
-        // Draw side gradients based on the actual rendered content area
         if (any_image_rendered) {
             SDL_FRect left_rect_gradient = {0, 0, overall_content_start_x, display_area_height};
             if (left_rect_gradient.w > 0.5f) { // Use a small threshold for float comparison
@@ -1083,7 +1147,7 @@ static bool select_monitor(int monitor_index, int *x, int *y) {
 }
 
 // Helper function for high-quality image scaling with border detection and removal
-static void create_high_quality_texture(SDL_Renderer *renderer, ImageEntry *image) {
+static void create_texture(SDL_Renderer *renderer, ImageEntry *image) {
     // Load the image as a surface
     image->surface = IMG_Load(image->path);
     if (!image->surface) {
@@ -1280,31 +1344,31 @@ static void update_progress(float progress, const char *message) {
     progress_bar_update(progress, message);
 }
 
-void previous_view() {
-    if (viewer.current_view == 0 || viewer.page_turning_in_progress) {
-        return;
-    }
-
+void view_changed(int old_view, int new_view) {
     // Update the page change timer
     viewer.last_page_change_time = SDL_GetTicks();
     viewer.show_progress_indicator = true;
     
-    // Unload current_viewbb images
-    for (int i = 0; i < viewer.views[viewer.current_view].count; i++) {
-        int img_idx = viewer.views[viewer.current_view].image_indices[i];
+    // Unload current_view images
+    for (int i = 0; i < viewer.views[old_view].count; i++) {
+        int img_idx = viewer.views[old_view].image_indices[i];
         unload_image(img_idx);
     }
 
-    // Move to previous view
-    viewer.current_view--;
-    if (viewer.current_view < 0) {
-        viewer.current_view = 0; // Ensure we don't go out of bounds
-    }
-    // Preload the previous image if available
-    for (int i = 0; i < viewer.views[viewer.current_view].count; i++) {
-        int img_idx = viewer.views[viewer.current_view].image_indices[i];
+    // Load current images
+    for (int i = 0; i < viewer.views[new_view].count; i++) {
+        int img_idx = viewer.views[new_view].image_indices[i];
         load_image(img_idx);
     }
+
+    viewer.current_view = new_view;
+}
+
+void previous_view() {
+    if (viewer.current_view == 0 || viewer.page_turning_in_progress) {
+        return;
+    }
+    view_changed(viewer.current_view, viewer.current_view - 1);
 }
 
 
@@ -1312,25 +1376,8 @@ void next_view() {
     if (viewer.current_view == viewer.view_count - 1 || viewer.page_turning_in_progress) {
         return;
     }
-    
-    // Update the page change timer
-    viewer.last_page_change_time = SDL_GetTicks();
-    viewer.show_progress_indicator = true;
-    
-    // Unload previous images
-    for (int i = 0; i < viewer.views[viewer.current_view].count; i++) {
-        int img_idx = viewer.views[viewer.current_view].image_indices[i];
-        unload_image(img_idx);
-    }
-    
-    // Move to next view
-    viewer.current_view++;
-    
-    // Load current images
-    for (int i = 0; i < viewer.views[viewer.current_view].count; i++) {
-        int img_idx = viewer.views[viewer.current_view].image_indices[i];
-        load_image(img_idx);
-    }
+
+    view_changed(viewer.current_view, viewer.current_view + 1);
 }
 
 static void generate_default_views() {

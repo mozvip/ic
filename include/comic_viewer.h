@@ -55,8 +55,11 @@ typedef struct ArchiveHandle {
 #define MAX_IMAGES_PER_VIEW 4
 
 typedef struct ImageView {
-    int image_indices[MAX_IMAGES_PER_VIEW];  // Indices of images in this view
-    int count;                              // Number of images in this view
+    int image_indices[MAX_IMAGES_PER_VIEW];     // Indices of images in this view
+    int count;                                  // Number of images in this view
+    int total_width;                            // Total width of the view
+    int max_height;                             // Max height of the view
+    SDL_FRect crop_rect;                        // Crop rectangle for the view
 } ImageView;
 
 // Define the ViewerState struct
@@ -94,6 +97,13 @@ struct ViewerState {
     int current_view;              // Current view index
     int view_count;                // Total number of views
     bool right_to_left;            // Reading direction (for manga)
+
+    // Zoom settings
+    float zoom_level;              // Current zoom level (1.0 = 100%)
+    bool zoomed;                   // Whether we are currently in zoomed mode
+    int zoom_center_x;             // X-coordinate center of zoom (in window coordinates)
+    int zoom_center_y;             // Y-coordinate center of zoom (in window coordinates)
+    float max_zoom;                // Maximum zoom level (e.g., 3.0 = 300%)
 };
 
 // Declare viewer as an extern variable of this struct type
