@@ -1,6 +1,6 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -I./include -g
-LDFLAGS = -lSDL3 -lSDL3_image -lSDL3_ttf -lzip -lm
+LDFLAGS = -lSDL3 -lSDL3_ttf -lzip -lm -lfreeimage
 
 SRC_DIR = src
 OBJ_DIR = obj

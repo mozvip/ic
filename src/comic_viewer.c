@@ -20,6 +20,7 @@
 #include "comic_loaders.h"
 #include "progress_bar.h"
 #include "progress_indicator.h" // Moved here
+#include "image_loader.h" // Add FreeImage loader
 
 SDL_Color white = {255, 255, 255, 255}; // White
 
@@ -154,6 +155,14 @@ bool comic_viewer_init(int monitor_index) {
     // Initialize SDL_ttf
     if (!TTF_Init()) {
         fprintf(stderr, "SDL_ttf could not initialize! SDL_ttf Error: %s\n", SDL_GetError());
+        SDL_Quit();
+        return false;
+    }
+
+    // Initialize FreeImage
+    if (!image_loader_init()) {
+        fprintf(stderr, "Failed to initialize FreeImage library\n");
+        TTF_Quit();
         SDL_Quit();
         return false;
     }
@@ -386,6 +395,9 @@ void comic_viewer_run(void) {
 void comic_viewer_cleanup(void) {
     // Clean up progress bar resources
     progress_bar_cleanup();
+    
+    // Clean up FreeImage
+    image_loader_cleanup();
     
     // Close archive if open
     if (viewer.archive) {
@@ -1148,10 +1160,10 @@ static bool select_monitor(int monitor_index, int *x, int *y) {
 
 // Helper function for high-quality image scaling with border detection and removal
 static void create_texture(SDL_Renderer *renderer, ImageEntry *image) {
-    // Load the image as a surface
-    image->surface = IMG_Load(image->path);
+    // Load the image as a surface using FreeImage
+    image->surface = image_load_surface(image->path);
     if (!image->surface) {
-        fprintf(stderr, "Failed to load image %s: %s\n", image->path, SDL_GetError());
+        fprintf(stderr, "Failed to load image %s with FreeImage\n", image->path);
         return;
     }
 

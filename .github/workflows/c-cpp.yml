@@ -25,6 +25,8 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get -y install build-essential make libzip-dev
+          # Install FreeImage library
+          sudo apt-get -y install libfreeimage-dev
           # Install SDL3 and TTF dependencies for progress bar
           sudo apt-get -y install libsdl2-dev libsdl2-ttf-dev || echo "SDL2 fallback"
       - name: Install libcurl
