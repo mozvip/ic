@@ -26,6 +26,9 @@ SDL_Color white = {255, 255, 255, 255}; // White
 
 struct ViewerState viewer; // Define the global viewer variable
 
+// Global state for image enhancement toggle
+static bool enhancement_enabled = true;
+
 // Forward declarations for internal functions
 static void free_resources(void);
 static void handle_events(void);
@@ -625,6 +628,33 @@ static void handle_events(void) {
                             viewer.zoom_level = 2.0f;
                         }
                         break;
+                        
+                    case SDLK_E: // Toggle image enhancements
+                        {
+                            enhancement_enabled = !enhancement_enabled;
+                            image_loader_set_auto_enhance(enhancement_enabled);
+                            
+                            printf("Image enhancements %s\n", enhancement_enabled ? "enabled" : "disabled");
+                            
+                            // Force reload of only the currently visible images to apply/remove enhancements
+                            unload_images_for_view(viewer.current_view);
+                            load_images_for_view(viewer.current_view);
+                        }
+                        break;
+                        
+                    case SDLK_H: // Show help
+                        printf("\n=== Image Comic Viewer - Keyboard Controls ===\n");
+                        printf("Arrow Keys / Space / Backspace : Navigate pages\n");
+                        printf("Home / End                     : First / Last page\n");
+                        printf("1 / 2                         : Single / Double page mode\n");
+                        printf("F / F12                       : Toggle fullscreen\n");
+                        printf("Z                             : Toggle zoom mode\n");
+                        printf("+/- (or numpad)               : Zoom in/out\n");
+                        printf("E                             : Toggle image enhancements\n");
+                        printf("H                             : Show this help\n");
+                        printf("Escape                        : Exit\n");
+                        printf("==============================================\n\n");
+                        break;
                 }
                 break;
                 
@@ -855,8 +885,10 @@ void display_info()
         draw_progress_indicator(viewer.renderer, progress, centerX, centerY, radius); // Pass viewer.renderer
                 
         // Display page number and total
-        char info_text[32];
-        snprintf(info_text, sizeof(info_text), "%d / %d", viewer.current_view + 1, viewer.view_count);
+        char info_text[64];
+        snprintf(info_text, sizeof(info_text), "%d / %d %s", 
+                viewer.current_view + 1, viewer.view_count,
+                enhancement_enabled ? "[E+]" : "[E-]");
 
         SDL_Texture *text_texture = render_text(info_text, white);
         if (text_texture) {

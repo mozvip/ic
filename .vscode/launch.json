@@ -9,7 +9,7 @@
             "type": "cppdbg",
             "request": "launch",
             "program": "${workspaceFolder}/bin/ic",
-            "args": ["\"/mnt/homesrvpc/8t2/Calibre-BD/Les charognards du Cosmos/Le Vagabond des Limbes - T03 (2937)/Le Vagabond des Limbes - T03 - Les charognards du Cosmos.cbz\""],
+            "args": ["${workspaceFolder}/test/images/"],
             "stopAtEntry": false,
             "cwd": "${fileDirname}",
             "environment": [],

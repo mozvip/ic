@@ -16,4 +16,7 @@ SDL_Surface* image_load_surface(const char *filename);
 // Check if file extension is supported
 bool image_is_supported(const char *filename);
 
+// Enable/disable automatic image enhancement
+void image_loader_set_auto_enhance(bool enabled);
+
 #endif // IMAGE_LOADER_H

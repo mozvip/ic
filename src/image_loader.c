@@ -1,4 +1,5 @@
 #include "image_loader.h"
+#include "image_processor.h"
 #include <FreeImage.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,6 +19,9 @@ typedef struct Image {
 #endif
 
 static bool freeimage_initialized = false;
+
+// Auto enhancement option
+static bool auto_enhance_enabled = true;
 
 // Supported file extensions
 static const char* supported_extensions[] = {
@@ -42,6 +46,14 @@ void image_loader_cleanup(void) {
         FreeImage_DeInitialise();
         freeimage_initialized = false;
     }
+}
+
+void image_loader_set_auto_enhance(bool enabled) {
+    auto_enhance_enabled = enabled;
+}
+
+bool image_loader_get_auto_enhance(void) {
+    return auto_enhance_enabled;
 }
 
 Image* image_load(const char *filename) {
@@ -154,21 +166,31 @@ SDL_Surface* image_load_surface(const char *filename) {
         return NULL;
     }
     
+    // Apply quality enhancements if enabled
+    FIBITMAP *enhanced = bitmap32;
+    if (auto_enhance_enabled) {
+        FIBITMAP *temp = auto_enhance_image(bitmap32);
+        if (temp) {
+            FreeImage_Unload(bitmap32);
+            enhanced = temp;
+        }
+    }
+    
     // Get image properties
-    int width = FreeImage_GetWidth(bitmap32);
-    int height = FreeImage_GetHeight(bitmap32);
-    int pitch = FreeImage_GetPitch(bitmap32);
+    int width = FreeImage_GetWidth(enhanced);
+    int height = FreeImage_GetHeight(enhanced);
+    int pitch = FreeImage_GetPitch(enhanced);
     
     // Create SDL surface
     SDL_Surface *surface = SDL_CreateSurface(width, height, SDL_PIXELFORMAT_RGBA32);
     if (!surface) {
         fprintf(stderr, "Failed to create SDL surface: %s\n", SDL_GetError());
-        FreeImage_Unload(bitmap32);
+        FreeImage_Unload(enhanced);
         return NULL;
     }
     
     // Copy pixel data (FreeImage uses BGR, SDL expects RGB)
-    BYTE *src_bits = FreeImage_GetBits(bitmap32);
+    BYTE *src_bits = FreeImage_GetBits(enhanced);
     uint8_t *dst_pixels = (uint8_t*)surface->pixels;
     
     for (int y = 0; y < height; y++) {
@@ -187,7 +209,7 @@ SDL_Surface* image_load_surface(const char *filename) {
         }
     }
     
-    FreeImage_Unload(bitmap32);
+    FreeImage_Unload(enhanced);
     return surface;
 }
 
@@ -217,4 +239,59 @@ bool image_is_supported(const char *filename) {
     }
     
     return false;
+}
+
+void image_loader_test_enhancement(const char *input_file, const char *output_file) {
+    if (!input_file || !output_file || !freeimage_initialized) {
+        printf("Test enhancement: Invalid parameters or FreeImage not initialized\n");
+        return;
+    }
+    
+    // Load original image
+    FREE_IMAGE_FORMAT fif = FreeImage_GetFileType(input_file, 0);
+    if (fif == FIF_UNKNOWN) {
+        fif = FreeImage_GetFIFFromFilename(input_file);
+    }
+    
+    if (fif == FIF_UNKNOWN || !FreeImage_FIFSupportsReading(fif)) {
+        printf("Test enhancement: Unsupported image format: %s\n", input_file);
+        return;
+    }
+    
+    FIBITMAP *original = FreeImage_Load(fif, input_file, 0);
+    if (!original) {
+        printf("Test enhancement: Failed to load %s\n", input_file);
+        return;
+    }
+    
+    FIBITMAP *bitmap32 = FreeImage_ConvertTo32Bits(original);
+    FreeImage_Unload(original);
+    
+    if (!bitmap32) {
+        printf("Test enhancement: Failed to convert to 32-bit\n");
+        return;
+    }
+    
+    // Apply enhancements
+    FIBITMAP *enhanced = auto_enhance_image(bitmap32);
+    if (!enhanced) {
+        printf("Test enhancement: Enhancement failed\n");
+        FreeImage_Unload(bitmap32);
+        return;
+    }
+    
+    // Save enhanced image
+    FREE_IMAGE_FORMAT output_fif = FreeImage_GetFIFFromFilename(output_file);
+    if (output_fif != FIF_UNKNOWN && FreeImage_FIFSupportsWriting(output_fif)) {
+        if (FreeImage_Save(output_fif, enhanced, output_file, 0)) {
+            printf("Enhanced image saved to: %s\n", output_file);
+        } else {
+            printf("Failed to save enhanced image to: %s\n", output_file);
+        }
+    } else {
+        printf("Unsupported output format for: %s\n", output_file);
+    }
+    
+    FreeImage_Unload(bitmap32);
+    FreeImage_Unload(enhanced);
 }
