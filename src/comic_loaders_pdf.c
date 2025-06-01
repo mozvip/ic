@@ -67,16 +67,9 @@ static char* extract_pdf_page(const char *pdf_path, int page_index, const char *
 
     // Execute the command
     int result = system(cmd);
-    
+
     free(escaped_pdf_path);
     free(escaped_output_prefix);
-    
-    // Check if extraction was successful
-    *success = (result == 0);
-    
-    if (!*success) {
-        return NULL;
-    }
    
     // Check if the file exists
     if (access(expected_path, F_OK) != 0) {
@@ -171,7 +164,8 @@ bool pdf_get_image(ArchiveHandle *handle, int index, char **out_path) {
     snprintf(output_prefix, sizeof(output_prefix), "%s/page", handle->temp_dir);
     
     char expected_path[512];
-    snprintf(expected_path, sizeof(expected_path), "%s-%02d.jpg", output_prefix, page_index + 1);
+
+    snprintf(expected_path, sizeof(expected_path), handle->total_images > 99 ? "%s-%03d.jpg" : "%s-%02d.jpg", output_prefix, page_index + 1);
     
     // Check if the file already exists
     if (access(expected_path, F_OK) == 0) {

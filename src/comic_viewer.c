@@ -26,8 +26,8 @@ SDL_Color white = {255, 255, 255, 255}; // White
 
 struct ViewerState viewer; // Define the global viewer variable
 
-// Global state for image enhancement toggle
-static bool enhancement_enabled = true;
+// Global state for image enhancement options
+ImageProcessingOptions* options;
 
 // Forward declarations for internal functions
 static void free_resources(void);
@@ -374,6 +374,9 @@ void comic_viewer_run(void) {
         return;
     }
 
+    // get default image processing options
+    options = get_default_processing_options();
+
     // Load images for the current view
     load_images_for_view(viewer.current_view);
     // Preload images for the next view if available
@@ -393,6 +396,9 @@ void comic_viewer_run(void) {
         // Delay to reduce CPU usage
         SDL_Delay(10);
     }
+
+    // Cleanup resources
+    free(options);
 }
 
 void comic_viewer_cleanup(void) {
@@ -631,11 +637,7 @@ static void handle_events(void) {
                         
                     case SDLK_E: // Toggle image enhancements
                         {
-                            enhancement_enabled = !enhancement_enabled;
-                            image_loader_set_auto_enhance(enhancement_enabled);
-                            
-                            printf("Image enhancements %s\n", enhancement_enabled ? "enabled" : "disabled");
-                            
+                            options->enhancement_enabled = !options->enhancement_enabled;
                             // Force reload of only the currently visible images to apply/remove enhancements
                             unload_images_for_view(viewer.current_view);
                             load_images_for_view(viewer.current_view);
@@ -878,7 +880,7 @@ void display_info()
         
         // Circle properties
         int radius = 40;
-        int centerX = 50;
+        int centerX = 100;  // Moved further from left edge
         int centerY = 50;
 
         // Draw the progress indicator
@@ -888,15 +890,21 @@ void display_info()
         char info_text[64];
         snprintf(info_text, sizeof(info_text), "%d / %d %s", 
                 viewer.current_view + 1, viewer.view_count,
-                enhancement_enabled ? "[E+]" : "[E-]");
+                options->enhancement_enabled ? "[E+]" : "[E-]");
 
         SDL_Texture *text_texture = render_text(info_text, white);
         if (text_texture) {
             float text_width, text_height;
             SDL_GetTextureSize(text_texture, &text_width, &text_height);
             
+            // Ensure text doesn't get cut off on the left edge
+            float text_x = (float)(centerX - text_width / 2);
+            if (text_x < 10) {  // Minimum 10px margin from left edge
+                text_x = 10;
+            }
+            
             SDL_FRect text_rect = {
-                (float)(centerX - text_width / 2),
+                text_x,
                 (float)(centerY + radius + 10),
                 (float)text_width,
                 (float)text_height
@@ -1193,7 +1201,7 @@ static bool select_monitor(int monitor_index, int *x, int *y) {
 // Helper function for high-quality image scaling with border detection and removal
 static void create_texture(SDL_Renderer *renderer, ImageEntry *image) {
     // Load the image as a surface using FreeImage
-    image->surface = image_load_surface(image->path);
+    image->surface = image_load_surface(image->path, options);
     if (!image->surface) {
         fprintf(stderr, "Failed to load image %s with FreeImage\n", image->path);
         return;

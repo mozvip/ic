@@ -7,6 +7,7 @@
 
 // Color correction options
 typedef struct {
+    bool enhancement_enabled;
     double gamma;           // 0.1 - 3.0 (1.0 = no change)
     double brightness;      // -100 to 100 (0 = no change)
     double contrast;        // -100 to 100 (0 = no change)
@@ -16,11 +17,8 @@ typedef struct {
     bool sharpen;          // Apply unsharp mask
 } ImageProcessingOptions;
 
-// Apply color corrections to an image
-FIBITMAP* process_image_quality(FIBITMAP* bitmap, const ImageProcessingOptions* options);
-
 // Auto-detect and apply optimal corrections
-FIBITMAP* auto_enhance_image(FIBITMAP* bitmap);
+FIBITMAP* auto_enhance_image(FIBITMAP* bitmap, ImageProcessingOptions* options);
 
 // Specific enhancement functions
 FIBITMAP* adjust_gamma(FIBITMAP* bitmap, double gamma);
@@ -30,6 +28,6 @@ FIBITMAP* auto_color_balance(FIBITMAP* bitmap);
 FIBITMAP* sharpen_image(FIBITMAP* bitmap, double amount);
 
 // Get default processing options
-ImageProcessingOptions get_default_processing_options(void);
+ImageProcessingOptions* get_default_processing_options(void);
 
 #endif // IMAGE_PROCESSOR_H

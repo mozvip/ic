@@ -20,9 +20,6 @@ typedef struct Image {
 
 static bool freeimage_initialized = false;
 
-// Auto enhancement option
-static bool auto_enhance_enabled = true;
-
 // Supported file extensions
 static const char* supported_extensions[] = {
     ".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", 
@@ -46,14 +43,6 @@ void image_loader_cleanup(void) {
         FreeImage_DeInitialise();
         freeimage_initialized = false;
     }
-}
-
-void image_loader_set_auto_enhance(bool enabled) {
-    auto_enhance_enabled = enabled;
-}
-
-bool image_loader_get_auto_enhance(void) {
-    return auto_enhance_enabled;
 }
 
 Image* image_load(const char *filename) {
@@ -134,7 +123,7 @@ Image* image_load(const char *filename) {
     return image;
 }
 
-SDL_Surface* image_load_surface(const char *filename) {
+SDL_Surface* image_load_surface(const char *filename, ImageProcessingOptions *options) {
     if (!filename || !freeimage_initialized) {
         return NULL;
     }
@@ -168,8 +157,8 @@ SDL_Surface* image_load_surface(const char *filename) {
     
     // Apply quality enhancements if enabled
     FIBITMAP *enhanced = bitmap32;
-    if (auto_enhance_enabled) {
-        FIBITMAP *temp = auto_enhance_image(bitmap32);
+    if (options->enhancement_enabled) {
+        FIBITMAP *temp = auto_enhance_image(bitmap32, options);
         if (temp) {
             FreeImage_Unload(bitmap32);
             enhanced = temp;
@@ -239,59 +228,4 @@ bool image_is_supported(const char *filename) {
     }
     
     return false;
-}
-
-void image_loader_test_enhancement(const char *input_file, const char *output_file) {
-    if (!input_file || !output_file || !freeimage_initialized) {
-        printf("Test enhancement: Invalid parameters or FreeImage not initialized\n");
-        return;
-    }
-    
-    // Load original image
-    FREE_IMAGE_FORMAT fif = FreeImage_GetFileType(input_file, 0);
-    if (fif == FIF_UNKNOWN) {
-        fif = FreeImage_GetFIFFromFilename(input_file);
-    }
-    
-    if (fif == FIF_UNKNOWN || !FreeImage_FIFSupportsReading(fif)) {
-        printf("Test enhancement: Unsupported image format: %s\n", input_file);
-        return;
-    }
-    
-    FIBITMAP *original = FreeImage_Load(fif, input_file, 0);
-    if (!original) {
-        printf("Test enhancement: Failed to load %s\n", input_file);
-        return;
-    }
-    
-    FIBITMAP *bitmap32 = FreeImage_ConvertTo32Bits(original);
-    FreeImage_Unload(original);
-    
-    if (!bitmap32) {
-        printf("Test enhancement: Failed to convert to 32-bit\n");
-        return;
-    }
-    
-    // Apply enhancements
-    FIBITMAP *enhanced = auto_enhance_image(bitmap32);
-    if (!enhanced) {
-        printf("Test enhancement: Enhancement failed\n");
-        FreeImage_Unload(bitmap32);
-        return;
-    }
-    
-    // Save enhanced image
-    FREE_IMAGE_FORMAT output_fif = FreeImage_GetFIFFromFilename(output_file);
-    if (output_fif != FIF_UNKNOWN && FreeImage_FIFSupportsWriting(output_fif)) {
-        if (FreeImage_Save(output_fif, enhanced, output_file, 0)) {
-            printf("Enhanced image saved to: %s\n", output_file);
-        } else {
-            printf("Failed to save enhanced image to: %s\n", output_file);
-        }
-    } else {
-        printf("Unsupported output format for: %s\n", output_file);
-    }
-    
-    FreeImage_Unload(bitmap32);
-    FreeImage_Unload(enhanced);
 }

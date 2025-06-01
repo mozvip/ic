@@ -15,12 +15,12 @@ This document describes the image quality enhancement features implemented using
 - Improves visibility of details in dark or washed-out images
 
 ### 3. Gamma Correction
-- Applies slight gamma correction (1.1) to improve midtone visibility
-- Makes images appear more natural and balanced
+- Applies slight gamma correction (0.95) to improve contrast without over-brightening
+- Makes images appear more natural and balanced while avoiding excessive brightness
 
 ### 4. Saturation Enhancement
-- Slightly increases color saturation (1.1x) to make colors more vibrant
-- Helps with dull or faded images
+- Slightly increases color saturation (1.05x) to make colors more vibrant
+- Subtle enhancement that helps with dull or faded images without oversaturation
 
 ### 5. Automatic Enhancement
 - Combines all the above techniques in an optimal sequence
