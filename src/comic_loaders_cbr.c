@@ -102,6 +102,10 @@ ArchiveHandle* cbr_open(const char *path, int *total_images, ProgressCallback pr
         cbr_close(handle);
         return NULL;
     }
+
+    if (progress_cb) {
+        progress_cb(0.4f, "Creating list of images...");
+    }    
     
     while (fgets(line, sizeof(line), fp)) {
         // Remove trailing newline
@@ -162,7 +166,7 @@ ArchiveHandle* cbr_open(const char *path, int *total_images, ProgressCallback pr
     *total_images = count;
     
     if (progress_cb) {
-        progress_cb(1.0f, "Archive ready for on-demand loading");
+        progress_cb(1.0f, "Archive ready");
     }
     
     return handle;

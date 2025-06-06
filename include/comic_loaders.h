@@ -21,8 +21,7 @@ bool is_image_file(const char *filename);
 // Load images from a directory
 bool load_directory(const char *path, ImageEntry *images, int *image_count, int max_images, ProgressCallback progress_cb);
 
-// On-demand loading interface
-// Open an archive and prepare for on-demand loading
+// Open an archive and prepare for image loading
 ArchiveHandle* archive_open(const char *path, ArchiveType type, int *total_images, ProgressCallback progress_cb);
 
 // Get an image from the archive at the given index
@@ -37,17 +36,17 @@ bool extract_temp_file(const char *archive_path, const char *entry_name, const c
 // Escape a string for shell argument
 char* escape_shell_arg(const char *str);
 
-// CBZ specific functions for on-demand loading
+// CBZ specific functions
 ArchiveHandle* cbz_open(const char *path, int *total_images, ProgressCallback progress_cb);
 bool cbz_get_image(ArchiveHandle *handle, int index, char **out_path);
 void cbz_close(ArchiveHandle *handle);
 
-// CBR specific functions for on-demand loading
+// CBR specific functions
 ArchiveHandle* cbr_open(const char *path, int *total_images, ProgressCallback progress_cb);
 bool cbr_get_image(ArchiveHandle *handle, int index, char **out_path);
 void cbr_close(ArchiveHandle *handle);
 
-// PDF specific functions for on-demand loading
+// PDF specific functions
 ArchiveHandle* pdf_open(const char *path, int *total_images, ProgressCallback progress_cb);
 bool pdf_get_image(ArchiveHandle *handle, int index, char **out_path);
 void pdf_close(ArchiveHandle *handle);

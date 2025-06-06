@@ -129,7 +129,9 @@ FIBITMAP* sharpen_image(FIBITMAP* bitmap, double amount) {
 }
 
 FIBITMAP* auto_enhance_image(FIBITMAP* bitmap, ImageProcessingOptions* options) {
-    if (!bitmap) return NULL;
+    if (!options || !options->enhancement_enabled) {
+        return NULL;
+    }
     
     FIBITMAP* current = FreeImage_Clone(bitmap);
     if (!current) return NULL;

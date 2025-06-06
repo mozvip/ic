@@ -60,6 +60,8 @@ typedef struct ImageView {
     int total_width;                            // Total width of the view
     int max_height;                             // Max height of the view
     SDL_FRect crop_rect;                        // Crop rectangle for the view
+    struct ImageView *next;                     // Pointer to next view in linked list
+    struct ImageView *prev;                     // Pointer to previous view in linked list
 } ImageView;
 
 // Define the ViewerState struct
@@ -93,8 +95,9 @@ struct ViewerState {
 
     // Multi-image display settings
     bool multiple_images_mode;     // Whether to display multiple images
-    ImageView *views;              // Array of views
-    int current_view;              // Current view index
+    ImageView *first_view;         // Pointer to first view in linked list
+    ImageView *current_view_node;  // Pointer to current view node
+    int current_view_index;        // Current view index (for compatibility)
     int view_count;                // Total number of views
     bool right_to_left;            // Reading direction (for manga)
 

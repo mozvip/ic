@@ -77,6 +77,7 @@ static char* extract_pdf_page(const char *pdf_path, int page_index, const char *
         return NULL;
     }
 
+    *success = true;
     return strdup(expected_path);
 }
 

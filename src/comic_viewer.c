@@ -48,6 +48,30 @@ static void generate_default_views(void);
 static void previous_view(void);
 static void next_view(void);
 
+// Linked list helper functions
+static ImageView* create_view_node(void);
+static void append_view(ImageView *view);
+static void free_all_views(void);
+static ImageView* get_view_by_index(int index);
+static int get_current_view_index(void);
+
+// Compatibility functions for the linked list implementation
+static void set_current_view(int index) {
+    ImageView *view = get_view_by_index(index);
+    if (view) {
+        viewer.current_view_node = view;
+        viewer.current_view_index = index;
+    }
+}
+
+static int get_current_view(void) {
+    return viewer.current_view_index;
+}
+
+static int get_view_count(void) {
+    return viewer.view_count;
+}
+
 // Helper function to convert RGB to HSL
 // r, g, b, s, l are in [0, 1], h is in [0, 360)
 static void rgb_to_hsl(float r, float g, float b, float *h, float *s, float *l) {
@@ -261,7 +285,9 @@ bool comic_viewer_init(int monitor_index) {
     viewer.type = SOURCE_UNKNOWN;
     viewer.source_path = NULL;
     viewer.image_count = 0;
-    viewer.current_view = 0;
+    viewer.current_view_index = 0;
+    viewer.first_view = NULL;
+    viewer.current_view_node = NULL;
     viewer.running = false;
     viewer.fullscreen = false;
     viewer.archive = NULL;
@@ -346,21 +372,23 @@ bool comic_viewer_load(const char *path) {
 }
 
 void unload_images_for_view(int view_index) {
-    if (view_index < 0 || view_index >= viewer.view_count) return;
+    ImageView *view = get_view_by_index(view_index);
+    if (!view) return;
 
     // Unload images for the specified view
-    for (int i = 0; i < viewer.views[view_index].count; i++) {
-        int img_index = viewer.views[view_index].image_indices[i];
+    for (int i = 0; i < view->count; i++) {
+        int img_index = view->image_indices[i];
         unload_image(img_index);
     }
 }
 
 void load_images_for_view(int view_index) {
-    if (view_index < 0 || view_index >= viewer.view_count) return;
+    ImageView *view = get_view_by_index(view_index);
+    if (!view) return;
 
     // Load images for the current view
-    for (int i = 0; i < viewer.views[view_index].count; i++) {
-        int img_index = viewer.views[view_index].image_indices[i];
+    for (int i = 0; i < view->count; i++) {
+        int img_index = view->image_indices[i];
         if (!load_image(img_index)) {
             fprintf(stderr, "Failed to load image %d\n", img_index);
             return;
@@ -378,10 +406,10 @@ void comic_viewer_run(void) {
     options = get_default_processing_options();
 
     // Load images for the current view
-    load_images_for_view(viewer.current_view);
+    load_images_for_view(get_current_view());
     // Preload images for the next view if available
-    if (viewer.view_count > 1) {
-        load_images_for_view(viewer.current_view + 1);
+    if (get_view_count() > 1) {
+        load_images_for_view(get_current_view() + 1);
     }
     viewer.running = true;
 
@@ -419,7 +447,6 @@ void comic_viewer_cleanup(void) {
 }
 
 // Internal helper functions
-
 static bool load_image(int index) {
     if (index < 0 || index >= viewer.image_count) return false;
     
@@ -427,7 +454,6 @@ static bool load_image(int index) {
     if (viewer.images[index].texture != NULL) return true;
     
     if (viewer.archive) {
-        // On-demand loading mode
         char *image_path = NULL;
         if (archive_get_image(viewer.archive, index, &image_path)) {
             // Store the path in our image entry
@@ -519,28 +545,49 @@ static void handle_events(void) {
                         break;
 
                     case SDLK_1:
-                        if (viewer.views[viewer.current_view].count == 1) {
+                        if (viewer.current_view_node && viewer.current_view_node->count == 1) {
                             // This view is already in single image mode
                             break;
                         }
                         // the current view now has 1 image
-                        viewer.views[viewer.current_view].count = 1;
+                        viewer.current_view_node->count = 1;
+
+                        // save link to the next view node
+                        ImageView *backup_next_view = viewer.current_view_node->next;
+                        // insert a new view node after the current one
+                        viewer.current_view_node->next = create_view_node();
+                        viewer.current_view_node->next->prev = viewer.current_view_node;
+                        viewer.current_view_node->next->image_indices[0] = viewer.current_view_node->image_indices[1];
+                        viewer.current_view_node->next->next = backup_next_view;
+                        if (backup_next_view) {
+                            backup_next_view->prev = viewer.current_view_node->next;
+                        }
+
                         break;
 
                     case SDLK_2:
-                        if (viewer.views[viewer.current_view].count == 2) {
+                        if (viewer.current_view_node && viewer.current_view_node->count == 2) {
                             // This view is already in double image mode
                             break;
                         }
                         // check if we are not already displaying the last image
-                        if (viewer.current_view < viewer.view_count - 1) {
+                        if (viewer.current_view_node && viewer.current_view_node->next) {
                             // the current view now has 2 images
-                            viewer.views[viewer.current_view].count = 2;
-                            // the first image of the next view is the second image of the current view
-                            viewer.views[viewer.current_view].image_indices[1] = viewer.views[viewer.current_view+1].image_indices[0];
+                            viewer.current_view_node->count = 2;
+                            // the second image of the current view is the first image of the next view
+                            viewer.current_view_node->image_indices[1] = viewer.current_view_node->next->image_indices[0];
                             // ensure the image is loaded
-                            if (viewer.images[viewer.views[viewer.current_view].image_indices[1]].texture == NULL) {
-                                load_image(viewer.views[viewer.current_view].image_indices[1]);
+                            if (viewer.images[viewer.current_view_node->image_indices[1]].texture == NULL) {
+                                load_image(viewer.current_view_node->image_indices[1]);
+                            }
+                            // remove the next view from the linked list
+                            ImageView *next_view = viewer.current_view_node->next;
+                            if (next_view) {
+                                viewer.current_view_node->next = next_view->next;
+                                if (next_view->next) {
+                                    next_view->next->prev = viewer.current_view_node;
+                                    viewer.current_view_node->next = next_view->next;
+                                }
                             }
                         }
                         break;
@@ -559,34 +606,38 @@ static void handle_events(void) {
                         
                     case SDLK_HOME:
                         // First image
-                        if (viewer.current_view != 0) {
+                        if (get_current_view() != 0) {
                             // Clean up any loaded textures except the first one
-                            for (int i = 1; i < viewer.view_count; i++) {
+                            int view_count = get_view_count();
+                            for (int i = 1; i < view_count; i++) {
                                 unload_images_for_view(i);
                             }
-                            viewer.current_view = 0;
-                            load_images_for_view(viewer.current_view);
+                            set_current_view(0);
+                            load_images_for_view(get_current_view());
 
                             // Preload the next image
-                            if (viewer.view_count > 1) {
-                                load_images_for_view(viewer.current_view + 1);
+                            if (view_count > 1) {
+                                load_images_for_view(get_current_view() + 1);
                             }
                         }
                         break;
                         
                     case SDLK_END:
                         // Last image
-                        if (viewer.current_view != viewer.view_count - 1) {
-                            // Clean up any loaded textures except the last one
-                            for (int i = 0; i < viewer.view_count - 1; i++) {
-                                unload_images_for_view(i);
-                            }
-                            viewer.current_view = viewer.view_count - 1;
-                            load_images_for_view(viewer.current_view);
+                        {
+                            int view_count = get_view_count();
+                            if (get_current_view() != view_count - 1) {
+                                // Clean up any loaded textures except the last one
+                                for (int i = 0; i < view_count - 1; i++) {
+                                    unload_images_for_view(i);
+                                }
+                                set_current_view(view_count - 1);
+                                load_images_for_view(get_current_view());
 
-                            // Preload the previous image
-                            if (viewer.view_count > 1) {
-                                load_images_for_view(viewer.current_view - 1);
+                                // Preload the previous image
+                                if (view_count > 1) {
+                                    load_images_for_view(get_current_view() - 1);
+                                }
                             }
                         }
                         break;
@@ -639,8 +690,8 @@ static void handle_events(void) {
                         {
                             options->enhancement_enabled = !options->enhancement_enabled;
                             // Force reload of only the currently visible images to apply/remove enhancements
-                            unload_images_for_view(viewer.current_view);
-                            load_images_for_view(viewer.current_view);
+                            unload_images_for_view(get_current_view());
+                            load_images_for_view(get_current_view());
                         }
                         break;
                         
@@ -690,7 +741,7 @@ static void render_current_view(void) {
     SDL_RenderClear(viewer.renderer);
 
     if (viewer.page_turning_in_progress) {
-        ImageEntry *current_img = &viewer.images[viewer.current_view];
+        ImageEntry *current_img = &viewer.images[get_current_view()];
         ImageEntry *next_img = &viewer.images[viewer.target_view];
 
         // Ensure both textures are loaded
@@ -741,11 +792,13 @@ static void render_current_view(void) {
         if (viewer.page_turn_progress >= 1.0f) {
             // Animation complete
             viewer.page_turning_in_progress = false;
-            viewer.current_view = viewer.target_view;
+            set_current_view(viewer.target_view);
         }
     } else {
         // Normal rendering
-        ImageView *current_display_view = &viewer.views[viewer.current_view];
+        ImageView *current_display_view = viewer.current_view_node;
+        if (!current_display_view) return;
+        
         int num_images_in_this_view = current_display_view->count;
 
         float display_area_width = (float)viewer.drawable_width;
@@ -876,7 +929,8 @@ void display_info()
     // Only show progress indicator for 2 seconds (2000 ms) after a page change
     if (elapsed_time <= 2000) {
         // Calculate progress as a value between 0.0 and 1.0
-        float progress = (float)viewer.current_view / (float)(viewer.view_count - 1);
+        int view_count = get_view_count();
+        float progress = (float)get_current_view() / (float)(view_count - 1);
         
         // Circle properties
         int radius = 40;
@@ -889,7 +943,7 @@ void display_info()
         // Display page number and total
         char info_text[64];
         snprintf(info_text, sizeof(info_text), "%d / %d %s", 
-                viewer.current_view + 1, viewer.view_count,
+                get_current_view() + 1, view_count,
                 options->enhancement_enabled ? "[E+]" : "[E-]");
 
         SDL_Texture *text_texture = render_text(info_text, white);
@@ -934,6 +988,9 @@ static void free_resources(void) {
     // Free source path
     free(viewer.source_path);
     viewer.source_path = NULL;
+    
+    // Free views linked list
+    free_all_views();
     
     // Free font resources
     if (viewer.font) {
@@ -1396,64 +1453,154 @@ static void update_progress(float progress, const char *message) {
     progress_bar_update(progress, message);
 }
 
-void view_changed(int old_view, int new_view) {
+void view_changed(ImageView *old_view_node, ImageView *new_view_node) {
     // Update the page change timer
     viewer.last_page_change_time = SDL_GetTicks();
     viewer.show_progress_indicator = true;
     
-    // Unload current_view images
-    for (int i = 0; i < viewer.views[old_view].count; i++) {
-        int img_idx = viewer.views[old_view].image_indices[i];
-        unload_image(img_idx);
+    // Unload old view images
+    if (old_view_node) {
+        for (int i = 0; i < old_view_node->count; i++) {
+            int img_idx = old_view_node->image_indices[i];
+            unload_image(img_idx);
+        }
     }
 
-    // Load current images
-    for (int i = 0; i < viewer.views[new_view].count; i++) {
-        int img_idx = viewer.views[new_view].image_indices[i];
-        load_image(img_idx);
+    // Load new view images
+    if (new_view_node) {
+        for (int i = 0; i < new_view_node->count; i++) {
+            int img_idx = new_view_node->image_indices[i];
+            load_image(img_idx);
+        }
     }
-
-    viewer.current_view = new_view;
 }
 
 void previous_view() {
-    if (viewer.current_view == 0 || viewer.page_turning_in_progress) {
+    if (!viewer.current_view_node || !viewer.current_view_node->prev || viewer.page_turning_in_progress) {
         return;
     }
-    view_changed(viewer.current_view, viewer.current_view - 1);
+
+    ImageView *old_view_node = viewer.current_view_node;
+    viewer.current_view_node = viewer.current_view_node->prev;
+    viewer.current_view_index--;
+    view_changed(old_view_node, viewer.current_view_node);
 }
 
 
 void next_view() {
-    if (viewer.current_view == viewer.view_count - 1 || viewer.page_turning_in_progress) {
+    if (!viewer.current_view_node || !viewer.current_view_node->next || viewer.page_turning_in_progress) {
         return;
     }
 
-    view_changed(viewer.current_view, viewer.current_view + 1);
+    ImageView *old_view_node = viewer.current_view_node;
+    viewer.current_view_node = viewer.current_view_node->next;
+    viewer.current_view_index++;
+    view_changed(old_view_node, viewer.current_view_node);
 }
 
 static void generate_default_views() {
     // Clear any existing views
-    if (viewer.views) {
-        free(viewer.views);
-    }
-    
-    // Allocate views
-    viewer.views = malloc(viewer.image_count * sizeof(ImageView));
-    if (!viewer.views) {
-        fprintf(stderr, "Failed to allocate memory for views\n");
-        return;
-    }
+    free_all_views();
     
     viewer.view_count = 0;
     int i = 0;
     
     while (i < viewer.image_count) {
-        ImageView *view = &viewer.views[viewer.view_count];
+        ImageView *view = create_view_node();
+        if (!view) {
+            fprintf(stderr, "Failed to create view node\n");
+            return;
+        }
+        
         // Single image view by default
         view->image_indices[0] = i;
         view->count = 1;
+        
+        append_view(view);
         i++;
-        viewer.view_count++;
     }
+    
+    // Set the current view to the first view
+    if (viewer.first_view) {
+        viewer.current_view_node = viewer.first_view;
+        viewer.current_view_index = 0;
+    }
+}
+
+// Internal helper functions
+
+// Linked list helper functions
+static ImageView* create_view_node(void) {
+    ImageView *view = malloc(sizeof(ImageView));
+    if (!view) {
+        fprintf(stderr, "Failed to allocate memory for view node\n");
+        return NULL;
+    }
+    
+    // Initialize the view
+    view->count = 0;
+    view->total_width = 0;
+    view->max_height = 0;
+    view->crop_rect = (SDL_FRect){0, 0, 0, 0};
+    view->next = NULL;
+    view->prev = NULL;
+    
+    for (int i = 0; i < MAX_IMAGES_PER_VIEW; i++) {
+        view->image_indices[i] = -1;
+    }
+    
+    return view;
+}
+
+static void append_view(ImageView *view) {
+    if (!view) return;
+    
+    if (!viewer.first_view) {
+        // First view in the list
+        viewer.first_view = view;
+        viewer.current_view_node = view;
+    } else {
+        // Find the last view and append
+        ImageView *current = viewer.first_view;
+        while (current->next) {
+            current = current->next;
+        }
+        current->next = view;
+        view->prev = current;
+    }
+    viewer.view_count++;
+}
+
+static void free_all_views(void) {
+    ImageView *current = viewer.first_view;
+    while (current) {
+        ImageView *next = current->next;
+        free(current);
+        current = next;
+    }
+    viewer.first_view = NULL;
+    viewer.current_view_node = NULL;
+    viewer.view_count = 0;
+}
+
+static ImageView* get_view_by_index(int index) {
+    if (index < 0) return NULL;
+    
+    ImageView *current = viewer.first_view;
+    for (int i = 0; i < index && current; i++) {
+        current = current->next;
+    }
+    return current;
+}
+
+static int get_current_view_index(void) {
+    if (!viewer.current_view_node || !viewer.first_view) return 0;
+    
+    ImageView *current = viewer.first_view;
+    int index = 0;
+    while (current && current != viewer.current_view_node) {
+        current = current->next;
+        index++;
+    }
+    return index;
 }
