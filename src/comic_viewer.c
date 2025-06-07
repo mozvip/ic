@@ -72,6 +72,66 @@ static int get_view_count(void) {
     return viewer.view_count;
 }
 
+static void remove_current_view(void) {
+    if (!viewer.current_view_node || viewer.view_count <= 1) {
+        // Can't remove if no current view or only one view left
+        return;
+    }
+    
+    ImageView *view_to_remove = viewer.current_view_node;
+    ImageView *next_view = view_to_remove->next;
+    ImageView *prev_view = view_to_remove->prev;
+    
+    // Unload any images from the view being removed
+    for (int i = 0; i < view_to_remove->count; i++) {
+        int image_index = view_to_remove->image_indices[i];
+        if (image_index >= 0 && image_index < viewer.image_count) {
+            if (viewer.images[image_index].texture) {
+                SDL_DestroyTexture(viewer.images[image_index].texture);
+                viewer.images[image_index].texture = NULL;
+            }
+        }
+    }
+    
+    // Update linked list connections
+    if (prev_view) {
+        prev_view->next = next_view;
+    } else {
+        // Removing the first view
+        viewer.first_view = next_view;
+    }
+    
+    if (next_view) {
+        next_view->prev = prev_view;
+    }
+    
+    // Move to the next view, or previous if no next
+    if (next_view) {
+        viewer.current_view_node = next_view;
+        // current_view_index stays the same since we removed the current view
+    } else if (prev_view) {
+        viewer.current_view_node = prev_view;
+        viewer.current_view_index--;
+    }
+    
+    // Free the removed view
+    free(view_to_remove);
+    viewer.view_count--;
+    
+    // Load images for the new current view
+    if (viewer.current_view_node) {
+        for (int i = 0; i < viewer.current_view_node->count; i++) {
+            int image_index = viewer.current_view_node->image_indices[i];
+            if (image_index >= 0 && image_index < viewer.image_count) {
+                load_image(image_index);
+            }
+        }
+        
+        // Update page change time for progress indicator
+        viewer.last_page_change_time = SDL_GetTicks();
+    }
+}
+
 // Helper function to convert RGB to HSL
 // r, g, b, s, l are in [0, 1], h is in [0, 360)
 static void rgb_to_hsl(float r, float g, float b, float *h, float *s, float *l) {
@@ -704,8 +764,14 @@ static void handle_events(void) {
                         printf("+/- (or numpad)               : Zoom in/out\n");
                         printf("E                             : Toggle image enhancements\n");
                         printf("H                             : Show this help\n");
+                        printf("Delete                        : Remove current view from list\n");
                         printf("Escape                        : Exit\n");
                         printf("==============================================\n\n");
+                        break;
+                        
+                    case SDLK_DELETE:
+                        // Remove current view from the list
+                        remove_current_view();
                         break;
                 }
                 break;
