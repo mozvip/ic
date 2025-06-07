@@ -545,7 +545,7 @@ static void handle_events(void) {
                         break;
 
                     case SDLK_1:
-                        if (viewer.current_view_node && viewer.current_view_node->count == 1) {
+                        if (viewer.current_view_node->count == 1) {
                             // This view is already in single image mode
                             break;
                         }
@@ -565,12 +565,12 @@ static void handle_events(void) {
                         break;
 
                     case SDLK_2:
-                        if (viewer.current_view_node && viewer.current_view_node->count == 2) {
+                        if (viewer.current_view_node->count == 2) {
                             // This view is already in double image mode
                             break;
                         }
                         // check if we are not already displaying the last image
-                        if (viewer.current_view_node && viewer.current_view_node->next) {
+                        if (viewer.current_view_node->next) {
                             // the current view now has 2 images
                             viewer.current_view_node->count = 2;
                             // the second image of the current view is the first image of the next view
