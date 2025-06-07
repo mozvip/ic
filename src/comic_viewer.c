@@ -887,6 +887,69 @@ static void render_current_view(void) {
 
         }
         
+        // Pre-calculate scales for all images to ensure consistent positioning
+        float image_scales[num_images_in_this_view];
+        float total_width = 0;
+        float unified_scale = 1.0f;
+        
+        if (num_images_in_this_view > 1) {
+            // For multiple images (like double-page spreads), calculate a unified scale
+            // that allows all images to fit side by side while maintaining aspect ratios
+            float total_original_width = 0;
+            float max_height = 0;
+            
+            // First pass: calculate total width and max height of all images
+            for (int i = 0; i < num_images_in_this_view; i++) {
+                int image_idx = current_display_view->image_indices[i];
+                ImageEntry *img = &viewer.images[image_idx];
+                
+                if (img->texture && img->width > 0 && img->height > 0) {
+                    total_original_width += img->width;
+                    if (img->height > max_height) {
+                        max_height = img->height;
+                    }
+                }
+            }
+            
+            if (total_original_width > 0 && max_height > 0) {
+                // Calculate scale to fit all images horizontally and vertically
+                float scale_x = display_area_width / total_original_width;
+                float scale_y = display_area_height / max_height;
+                unified_scale = (scale_x < scale_y) ? scale_x : scale_y;
+            }
+            
+            // Apply unified scale to all images
+            for (int i = 0; i < num_images_in_this_view; i++) {
+                int image_idx = current_display_view->image_indices[i];
+                ImageEntry *img = &viewer.images[image_idx];
+                
+                if (img->texture && img->width > 0 && img->height > 0) {
+                    image_scales[i] = unified_scale;
+                    total_width += img->width * unified_scale;
+                } else {
+                    image_scales[i] = 1.0f; // Fallback scale
+                }
+            }
+        } else {
+            // Single image: scale to fit within display area while maintaining aspect ratio
+            int image_idx = current_display_view->image_indices[0];
+            ImageEntry *img = &viewer.images[image_idx];
+            
+            if (img->texture && img->width > 0 && img->height > 0) {
+                float scale_x = display_area_width / img->width;
+                float scale_y = display_area_height / img->height;
+                float base_scale = (scale_x < scale_y) ? scale_x : scale_y;
+                
+                image_scales[0] = base_scale;
+                total_width = img->width * base_scale;
+            } else {
+                image_scales[0] = 1.0f;
+            }
+        }
+        
+        float start_x = (display_area_width - total_width) / 2.0f;
+        float current_x = start_x;
+        
         // Now do the actual rendering
         for (int i = 0; i < num_images_in_this_view; i++) {
             int image_idx = current_display_view->image_indices[i];
@@ -895,12 +958,11 @@ static void render_current_view(void) {
             if (img->texture && img->width > 0 && img->height > 0) {
                 any_image_rendered = true;
                 
-                // Calculate scaling - adjusted for zoom if needed
-                float base_scale_y = display_area_height / img->height;
-                float scale = base_scale_y;
+                float scale = image_scales[i];
                 
+                // Apply zoom scaling for rendering
                 if (viewer.zoomed) {
-                    scale = base_scale_y * scale_multiplier;
+                    scale = scale * scale_multiplier;
                 }
                 
                 if (scale <= 1e-6f) scale = 1e-6f; // Prevent zero or negative scale
@@ -911,32 +973,20 @@ static void render_current_view(void) {
                 if (scaled_height <= 0) scaled_height = 1;
 
                 // Calculate positions
-                float x_pos_render;
-                float y_pos_render;
+                float x_pos_render, y_pos_render;
                 
-                // Normal (non-zoomed) positioning
-                // First pass: calculate height-based scaling for all images
-                if (i == 0) {
-                    // First image is centered in the window
-                    float total_width = 0;
-                    for (int j = 0; j < num_images_in_this_view; j++) {
-                        int idx = current_display_view->image_indices[j];
-                        if (idx >= 0 && idx < viewer.image_count && 
-                            viewer.images[idx].texture && 
-                            viewer.images[idx].width > 0 && 
-                            viewer.images[idx].height > 0) {
-                            total_width += viewer.images[idx].width * base_scale_y;
-                        }
-                    }
-                    // Center the entire group of images
-                    x_pos_render = (display_area_width - total_width) / 2.0f;
+                if (viewer.zoomed) {
+                    // In zoom mode, center around the zoom center point
+                    x_pos_render = viewer.zoom_center_x - (scaled_width / 2.0f);
+                    y_pos_render = viewer.zoom_center_y - (scaled_height / 2.0f);
                 } else {
-                    // Subsequent images are placed directly after the previous image
-                    x_pos_render = overall_content_end_x;
+                    // Normal mode: use pre-calculated positioning
+                    x_pos_render = current_x;
+                    y_pos_render = (display_area_height - scaled_height) / 2.0f; // Center vertically
+                    
+                    // Update current_x for next image (only in non-zoom mode)
+                    current_x += img->width * image_scales[i];
                 }
-                
-                // Center the image vertically in the window
-                y_pos_render = (display_area_height - scaled_height) / 2.0f;
 
                 // Update overall content extents
                 if (x_pos_render < overall_content_start_x) {
