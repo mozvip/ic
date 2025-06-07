@@ -49,7 +49,7 @@ static void previous_view(void);
 static void next_view(void);
 
 // Linked list helper functions
-static ImageView* create_view_node(void);
+static ImageView* create_view_node(ImageView *prev_view);
 static void append_view(ImageView *view);
 static void free_all_views(void);
 static ImageView* get_view_by_index(int index);
@@ -555,8 +555,7 @@ static void handle_events(void) {
                         // save link to the next view node
                         ImageView *backup_next_view = viewer.current_view_node->next;
                         // insert a new view node after the current one
-                        viewer.current_view_node->next = create_view_node();
-                        viewer.current_view_node->next->prev = viewer.current_view_node;
+                        viewer.current_view_node->next = create_view_node(viewer.current_view_node);
                         viewer.current_view_node->next->image_indices[0] = viewer.current_view_node->image_indices[1];
                         viewer.current_view_node->next->next = backup_next_view;
                         if (backup_next_view) {
@@ -1505,8 +1504,9 @@ static void generate_default_views() {
     viewer.view_count = 0;
     int i = 0;
     
+    ImageView *prev_view = NULL;
     while (i < viewer.image_count) {
-        ImageView *view = create_view_node();
+        ImageView *view = create_view_node(prev_view);
         if (!view) {
             fprintf(stderr, "Failed to create view node\n");
             return;
@@ -1514,7 +1514,8 @@ static void generate_default_views() {
         
         // Single image view by default
         view->image_indices[0] = i;
-        view->count = 1;
+
+        prev_view = view;
         
         append_view(view);
         i++;
@@ -1530,7 +1531,7 @@ static void generate_default_views() {
 // Internal helper functions
 
 // Linked list helper functions
-static ImageView* create_view_node(void) {
+static ImageView* create_view_node(ImageView* prev_view) {
     ImageView *view = malloc(sizeof(ImageView));
     if (!view) {
         fprintf(stderr, "Failed to allocate memory for view node\n");
@@ -1538,13 +1539,13 @@ static ImageView* create_view_node(void) {
     }
     
     // Initialize the view
-    view->count = 0;
+    view->count = 1; // Default to one image per view
     view->total_width = 0;
     view->max_height = 0;
     view->crop_rect = (SDL_FRect){0, 0, 0, 0};
     view->next = NULL;
-    view->prev = NULL;
-    
+    view->prev = prev_view;
+
     for (int i = 0; i < MAX_IMAGES_PER_VIEW; i++) {
         view->image_indices[i] = -1;
     }
