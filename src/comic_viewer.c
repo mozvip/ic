@@ -805,210 +805,153 @@ static void render_current_view(void) {
     SDL_SetRenderDrawColor(viewer.renderer, 0, 0, 0, 255);
     SDL_RenderClear(viewer.renderer);
 
-    if (viewer.page_turning_in_progress) {
-        ImageEntry *current_img = &viewer.images[get_current_view()];
-        ImageEntry *next_img = &viewer.images[viewer.target_view];
+    ImageView *current_display_view = viewer.current_view_node;
+    if (!current_display_view) return;
+    
+    int num_images_in_this_view = current_display_view->count;
 
-        // Ensure both textures are loaded
-        if (!current_img->texture || !next_img->texture) {
-            viewer.page_turning_in_progress = false; // Stop animation if textures are missing
-            return;
-        }
+    float display_area_width = (float)viewer.drawable_width;
+    float display_area_height = (float)viewer.drawable_height;
 
-        // Calculate scaling to fit in the window while maintaining aspect ratio
-        float scale_x = (float)viewer.drawable_width / current_img->width;
-        float scale_y = (float)viewer.drawable_height / current_img->height;
-        float scale = (scale_x < scale_y) ? scale_x : scale_y;
+    float overall_content_start_x = display_area_width; // Initialize to max
+    float overall_content_end_x = 0.0f;                 // Initialize to min
+    bool any_image_rendered = false;
 
-        int scaled_width = (int)(current_img->width * scale);
-        int scaled_height = (int)(current_img->height * scale);
+    SDL_Color left_gradient_color, right_gradient_color;
+    
+    // Prepare for zoomed view calculations
+    float scale_multiplier = 1.0f;
+    float viewport_offset_x = 0.0f;
+    float viewport_offset_y = 0.0f;
+    
+    // If zoomed, calculate the offset and scale
+    if (viewer.zoomed) {
+        scale_multiplier = viewer.zoom_level;
 
-        int x = (viewer.window_width - scaled_width) / 2;
-        int y = (viewer.window_height - scaled_height) / 2;
 
-        // Render the current page
-        SDL_FRect current_rect = {(float)x, (float)y, (float)scaled_width, (float)scaled_height};
-        SDL_RenderTexture(viewer.renderer, current_img->texture, &current_img->crop_rect, &current_rect);
-
-        // Render the next page with a page turn effect
-        SDL_FRect next_rect = {(float)x, (float)y, (float)scaled_width, (float)scaled_height};
+    }
+    
+    // Pre-calculate scales for all images to ensure consistent positioning
+    float image_scales[num_images_in_this_view];
+    float total_width = 0;
+    float unified_scale = 1.0f;
+    
+    if (num_images_in_this_view > 1) {
+        // For multiple images (like double-page spreads), calculate a unified scale
+        // that allows all images to fit side by side while maintaining aspect ratios
+        float total_original_width = 0;
+        float max_height = 0;
         
-        if (viewer.direction == 1) { // Forward page turn
-            // In SDL3, we need to create a custom implementation for the page turn effect
-            // using SDL_RenderGeometry or simpler methods
-            
-            // For now, implement a simple horizontal slide effect
-            float slide_position = (float)scaled_width * (1.0f - viewer.page_turn_progress);
-            next_rect.x = x + slide_position;
-            
-            // Render the next image with current progress
-            SDL_RenderTexture(viewer.renderer, next_img->texture, NULL, &next_rect);
-        } else { // Backward page turn
-            // Similar implementation for backward page turn
-            float slide_position = -((float)scaled_width * (1.0f - viewer.page_turn_progress));
-            next_rect.x = x + slide_position;
-            
-            // Render the previous image with current progress
-            SDL_RenderTexture(viewer.renderer, next_img->texture, NULL, &next_rect);
-        }
-        
-        // Update the animation progress
-        viewer.page_turn_progress += 0.05f; // Adjust speed as needed
-        if (viewer.page_turn_progress >= 1.0f) {
-            // Animation complete
-            viewer.page_turning_in_progress = false;
-            set_current_view(viewer.target_view);
-        }
-    } else {
-        // Normal rendering
-        ImageView *current_display_view = viewer.current_view_node;
-        if (!current_display_view) return;
-        
-        int num_images_in_this_view = current_display_view->count;
-
-        float display_area_width = (float)viewer.drawable_width;
-        float display_area_height = (float)viewer.drawable_height;
-
-        float overall_content_start_x = display_area_width; // Initialize to max
-        float overall_content_end_x = 0.0f;                 // Initialize to min
-        bool any_image_rendered = false;
-
-        SDL_Color left_gradient_color, right_gradient_color;
-        
-        // Prepare for zoomed view calculations
-        float scale_multiplier = 1.0f;
-        float viewport_offset_x = 0.0f;
-        float viewport_offset_y = 0.0f;
-        
-        // If zoomed, calculate the offset and scale
-        if (viewer.zoomed) {
-            scale_multiplier = viewer.zoom_level;
-
-
-        }
-        
-        // Pre-calculate scales for all images to ensure consistent positioning
-        float image_scales[num_images_in_this_view];
-        float total_width = 0;
-        float unified_scale = 1.0f;
-        
-        if (num_images_in_this_view > 1) {
-            // For multiple images (like double-page spreads), calculate a unified scale
-            // that allows all images to fit side by side while maintaining aspect ratios
-            float total_original_width = 0;
-            float max_height = 0;
-            
-            // First pass: calculate total width and max height of all images
-            for (int i = 0; i < num_images_in_this_view; i++) {
-                int image_idx = current_display_view->image_indices[i];
-                ImageEntry *img = &viewer.images[image_idx];
-                
-                if (img->texture && img->width > 0 && img->height > 0) {
-                    total_original_width += img->width;
-                    if (img->height > max_height) {
-                        max_height = img->height;
-                    }
-                }
-            }
-            
-            if (total_original_width > 0 && max_height > 0) {
-                // Calculate scale to fit all images horizontally and vertically
-                float scale_x = display_area_width / total_original_width;
-                float scale_y = display_area_height / max_height;
-                unified_scale = (scale_x < scale_y) ? scale_x : scale_y;
-            }
-            
-            // Apply unified scale to all images
-            for (int i = 0; i < num_images_in_this_view; i++) {
-                int image_idx = current_display_view->image_indices[i];
-                ImageEntry *img = &viewer.images[image_idx];
-                
-                if (img->texture && img->width > 0 && img->height > 0) {
-                    image_scales[i] = unified_scale;
-                    total_width += img->width * unified_scale;
-                } else {
-                    image_scales[i] = 1.0f; // Fallback scale
-                }
-            }
-        } else {
-            // Single image: scale to fit within display area while maintaining aspect ratio
-            int image_idx = current_display_view->image_indices[0];
-            ImageEntry *img = &viewer.images[image_idx];
-            
-            if (img->texture && img->width > 0 && img->height > 0) {
-                float scale_x = display_area_width / img->width;
-                float scale_y = display_area_height / img->height;
-                float base_scale = (scale_x < scale_y) ? scale_x : scale_y;
-                
-                image_scales[0] = base_scale;
-                total_width = img->width * base_scale;
-            } else {
-                image_scales[0] = 1.0f;
-            }
-        }
-        
-        float start_x = (display_area_width - total_width) / 2.0f;
-        float current_x = start_x;
-        
-        // Now do the actual rendering
+        // First pass: calculate total width and max height of all images
         for (int i = 0; i < num_images_in_this_view; i++) {
             int image_idx = current_display_view->image_indices[i];
-
             ImageEntry *img = &viewer.images[image_idx];
+            
             if (img->texture && img->width > 0 && img->height > 0) {
-                any_image_rendered = true;
-                
-                float scale = image_scales[i];
-                
-                // Apply zoom scaling for rendering
-                if (viewer.zoomed) {
-                    scale = scale * scale_multiplier;
+                total_original_width += img->width;
+                if (img->height > max_height) {
+                    max_height = img->height;
                 }
-                
-                if (scale <= 1e-6f) scale = 1e-6f; // Prevent zero or negative scale
-
-                int scaled_width = (int)(img->width * scale);
-                int scaled_height = (int)(img->height * scale);
-                if (scaled_width <= 0) scaled_width = 1; // Ensure positive dimensions
-                if (scaled_height <= 0) scaled_height = 1;
-
-                // Calculate positions
-                float x_pos_render, y_pos_render;
-                
-                if (viewer.zoomed) {
-                    // In zoom mode, center around the zoom center point
-                    x_pos_render = viewer.zoom_center_x - (scaled_width / 2.0f);
-                    y_pos_render = viewer.zoom_center_y - (scaled_height / 2.0f);
-                } else {
-                    // Normal mode: use pre-calculated positioning
-                    x_pos_render = current_x;
-                    y_pos_render = (display_area_height - scaled_height) / 2.0f; // Center vertically
-                    
-                    // Update current_x for next image (only in non-zoom mode)
-                    current_x += img->width * image_scales[i];
-                }
-
-                // Update overall content extents
-                if (x_pos_render < overall_content_start_x) {
-                    overall_content_start_x = x_pos_render;
-                }
-                if (x_pos_render + scaled_width > overall_content_end_x) {
-                    overall_content_end_x = x_pos_render + scaled_width;
-                }
-
-                if (i == 0) {
-                    // Analyze the left edge of the first image
-                    analyze_image_left_edge(image_idx, &left_gradient_color);
-                }
-                
-                if (i == (num_images_in_this_view - 1)) {
-                    // Analyze the right edge of the last image
-                    analyze_image_right_edge(image_idx, &right_gradient_color);
-                }
-
-                SDL_FRect dest_rect = {x_pos_render, y_pos_render, (float)scaled_width, (float)scaled_height};
-                SDL_RenderTexture(viewer.renderer, img->texture, &img->crop_rect, &dest_rect);
             }
+        }
+        
+        if (total_original_width > 0 && max_height > 0) {
+            // Calculate scale to fit all images horizontally and vertically
+            float scale_x = display_area_width / total_original_width;
+            float scale_y = display_area_height / max_height;
+            unified_scale = (scale_x < scale_y) ? scale_x : scale_y;
+        }
+        
+        // Apply unified scale to all images
+        for (int i = 0; i < num_images_in_this_view; i++) {
+            int image_idx = current_display_view->image_indices[i];
+            ImageEntry *img = &viewer.images[image_idx];
+            
+            if (img->texture && img->width > 0 && img->height > 0) {
+                image_scales[i] = unified_scale;
+                total_width += img->width * unified_scale;
+            } else {
+                image_scales[i] = 1.0f; // Fallback scale
+            }
+        }
+    } else {
+        // Single image: scale to fit within display area while maintaining aspect ratio
+        int image_idx = current_display_view->image_indices[0];
+        ImageEntry *img = &viewer.images[image_idx];
+        
+        if (img->texture && img->width > 0 && img->height > 0) {
+            float scale_x = display_area_width / img->width;
+            float scale_y = display_area_height / img->height;
+            float base_scale = (scale_x < scale_y) ? scale_x : scale_y;
+            
+            image_scales[0] = base_scale;
+            total_width = img->width * base_scale;
+        } else {
+            image_scales[0] = 1.0f;
+        }
+    }
+    
+    float start_x = (display_area_width - total_width) / 2.0f;
+    float current_x = start_x;
+    
+    // Now do the actual rendering
+    for (int i = 0; i < num_images_in_this_view; i++) {
+        int image_idx = current_display_view->image_indices[i];
+
+        ImageEntry *img = &viewer.images[image_idx];
+        if (img->texture && img->width > 0 && img->height > 0) {
+            any_image_rendered = true;
+            
+            float scale = image_scales[i];
+            
+            // Apply zoom scaling for rendering
+            if (viewer.zoomed) {
+                scale = scale * scale_multiplier;
+            }
+            
+            if (scale <= 1e-6f) scale = 1e-6f; // Prevent zero or negative scale
+
+            int scaled_width = (int)(img->width * scale);
+            int scaled_height = (int)(img->height * scale);
+            if (scaled_width <= 0) scaled_width = 1; // Ensure positive dimensions
+            if (scaled_height <= 0) scaled_height = 1;
+
+            // Calculate positions
+            float x_pos_render, y_pos_render;
+            
+            if (viewer.zoomed) {
+                // In zoom mode, center around the zoom center point
+                x_pos_render = viewer.zoom_center_x - (scaled_width / 2.0f);
+                y_pos_render = viewer.zoom_center_y - (scaled_height / 2.0f);
+            } else {
+                // Normal mode: use pre-calculated positioning
+                x_pos_render = current_x;
+                y_pos_render = (display_area_height - scaled_height) / 2.0f; // Center vertically
+                
+                // Update current_x for next image (only in non-zoom mode)
+                current_x += img->width * image_scales[i];
+            }
+
+            // Update overall content extents
+            if (x_pos_render < overall_content_start_x) {
+                overall_content_start_x = x_pos_render;
+            }
+            if (x_pos_render + scaled_width > overall_content_end_x) {
+                overall_content_end_x = x_pos_render + scaled_width;
+            }
+
+            if (i == 0) {
+                // Analyze the left edge of the first image
+                analyze_image_left_edge(image_idx, &left_gradient_color);
+            }
+            
+            if (i == (num_images_in_this_view - 1)) {
+                // Analyze the right edge of the last image
+                analyze_image_right_edge(image_idx, &right_gradient_color);
+            }
+
+            SDL_FRect dest_rect = {x_pos_render, y_pos_render, (float)scaled_width, (float)scaled_height};
+            SDL_RenderTexture(viewer.renderer, img->texture, &img->crop_rect, &dest_rect);
         }
 
         if (any_image_rendered) {
@@ -1591,7 +1534,7 @@ void view_changed(ImageView *old_view_node, ImageView *new_view_node) {
 }
 
 void previous_view() {
-    if (!viewer.current_view_node || !viewer.current_view_node->prev || viewer.page_turning_in_progress) {
+    if (!viewer.current_view_node || !viewer.current_view_node->prev) {
         return;
     }
 
@@ -1603,7 +1546,7 @@ void previous_view() {
 
 
 void next_view() {
-    if (!viewer.current_view_node || !viewer.current_view_node->next || viewer.page_turning_in_progress) {
+    if (!viewer.current_view_node || !viewer.current_view_node->next) {
         return;
     }
 

@@ -82,13 +82,6 @@ struct ViewerState {
     int monitor_index;        // Selected monitor index
     ArchiveHandle *archive;   // Handle for on-demand loading
 
-    // Page-turn animation state
-    bool page_turning_enabled;              // Whether a page-turn animations are enabled
-    bool page_turning_in_progress;  // Whether a page-turn animation is in progress
-    float page_turn_progress; // Progress of the page-turn animation (0.0 to 1.0)
-    int target_view;         // The target view index for the page turn
-    int direction;          // Direction of the page turn (1 for next, -1 for previous)
-
     // Progress indicator display timer
     Uint64 last_page_change_time;  // Time when the last page change occurred
     bool show_progress_indicator;  // Whether to show the progress indicator
