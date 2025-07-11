@@ -53,7 +53,6 @@ static ImageView* create_view_node(ImageView *prev_view);
 static void append_view(ImageView *view);
 static void free_all_views(void);
 static ImageView* get_view_by_index(int index);
-static int get_current_view_index(void);
 
 // Compatibility functions for the linked list implementation
 static void set_current_view(int index) {
@@ -480,9 +479,6 @@ void comic_viewer_run(void) {
 
         // Render the current image
         render_current_view();
-
-        // Delay to reduce CPU usage
-        SDL_Delay(10);
     }
 
     // Cleanup resources
@@ -821,8 +817,6 @@ static void render_current_view(void) {
     
     // Prepare for zoomed view calculations
     float scale_multiplier = 1.0f;
-    float viewport_offset_x = 0.0f;
-    float viewport_offset_y = 0.0f;
     
     // If zoomed, calculate the offset and scale
     if (viewer.zoomed) {
@@ -1651,16 +1645,4 @@ static ImageView* get_view_by_index(int index) {
         current = current->next;
     }
     return current;
-}
-
-static int get_current_view_index(void) {
-    if (!viewer.current_view_node || !viewer.first_view) return 0;
-    
-    ImageView *current = viewer.first_view;
-    int index = 0;
-    while (current && current != viewer.current_view_node) {
-        current = current->next;
-        index++;
-    }
-    return index;
 }
