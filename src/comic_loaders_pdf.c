@@ -62,7 +62,7 @@ static char* extract_pdf_page(const char *pdf_path, int page_index, const char *
     // Create command to render a single page using pdftoppm
     snprintf(cmd, sizeof(cmd), 
              "pdftoppm -r %d -f %d -l %d -jpeg \"%s\" %s",
-             PDF_PIXEL_DENSITY, page_index + 1, page_index + 1,
+             PDF_PIXEL_DENSITY, page_index + 1 , page_index + 1,
              pdf_path, output_prefix);
 
     // Execute the command
@@ -166,8 +166,11 @@ bool pdf_get_image(ArchiveHandle *handle, int index, char **out_path) {
     
     char expected_path[512];
 
-    snprintf(expected_path, sizeof(expected_path), handle->total_images > 99 ? "%s-%03d.jpg" : "%s-%02d.jpg", output_prefix, page_index + 1);
-    
+    // number of digits depends on total_images
+    int num_digits = handle->total_images > 99 ? 3 : handle->total_images > 9 ? 2 : 1;
+
+    snprintf(expected_path, sizeof(expected_path), "%s-%0*d.jpg", output_prefix, num_digits, page_index + 1);
+
     // Check if the file already exists
     if (access(expected_path, F_OK) == 0) {
         *out_path = strdup(expected_path);        
