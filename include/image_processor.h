@@ -14,22 +14,19 @@ typedef struct {
     bool auto_levels;       // Auto contrast/brightness
     bool color_balance;     // Auto color balance
     bool sharpen;          // Apply unsharp mask
+    bool enhancement_enabled;
 } ImageProcessingOptions;
 
-// Apply color corrections to an image
-FIBITMAP* process_image_quality(FIBITMAP* bitmap, const ImageProcessingOptions* options);
-
 // Auto-detect and apply optimal corrections
-FIBITMAP* auto_enhance_image(FIBITMAP* bitmap);
+void auto_enhance_image(SDL_Surface* surface, const ImageProcessingOptions* options);
 
 // Specific enhancement functions
-FIBITMAP* adjust_gamma(FIBITMAP* bitmap, double gamma);
-FIBITMAP* adjust_brightness_contrast(FIBITMAP* bitmap, double brightness, double contrast);
-FIBITMAP* adjust_saturation(FIBITMAP* bitmap, double saturation);
-FIBITMAP* auto_color_balance(FIBITMAP* bitmap);
-FIBITMAP* sharpen_image(FIBITMAP* bitmap, double amount);
+void adjust_gamma_brightness_contrast(SDL_Surface* surface, double gamma, double brightness, double contrast);
+void adjust_saturation(SDL_Surface* surface, double saturation);
+void auto_color_balance(SDL_Surface* surface);
+void sharpen_image(SDL_Surface* surface, double amount);
 
 // Get default processing options
-ImageProcessingOptions get_default_processing_options(void);
+ImageProcessingOptions* get_default_processing_options(void);
 
 #endif // IMAGE_PROCESSOR_H

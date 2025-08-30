@@ -74,7 +74,6 @@ bool load_directory(const char *path, ImageEntry *images, int *image_count, int 
     for (int i = 0; i < count; i++) {
         images[i].path = image_paths[i];
         images[i].surface = NULL;  // Initialize surface to NULL
-        images[i].texture = NULL;
     }
     
     *image_count = count;

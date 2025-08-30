@@ -6,17 +6,6 @@
 #include <string.h>
 #include <strings.h>
 
-// Forward declaration of Image struct if not already defined
-#ifndef IMAGE_STRUCT_DEFINED
-#define IMAGE_STRUCT_DEFINED
-typedef struct Image {
-    int width;
-    int height;
-    unsigned char *data;
-    bool is_valid;
-} Image;
-#endif
-
 static bool freeimage_initialized = false;
 
 // Supported file extensions
@@ -44,7 +33,7 @@ void image_loader_cleanup(void) {
     }
 }
 
-SDL_Surface* image_load_surface(const char *filename, ImageProcessingOptions *options) {
+FIBITMAP *load_image_file(const char *filename) {
     if (!filename || !freeimage_initialized) {
         return NULL;
     }
@@ -70,56 +59,40 @@ SDL_Surface* image_load_surface(const char *filename, ImageProcessingOptions *op
     // Convert to 24-bit BGR (no alpha)
     FIBITMAP *bitmap24 = FreeImage_ConvertTo24Bits(bitmap);
     FreeImage_Unload(bitmap);
-    
     if (!bitmap24) {
         fprintf(stderr, "Failed to convert image to 24-bit: %s\n", filename);
         return NULL;
     }
+
+    FreeImage_FlipVertical(bitmap24);
     
-    // Apply quality enhancements if enabled
-    FIBITMAP *enhanced = bitmap24;
-    if (options->enhancement_enabled) {
-        FIBITMAP *temp = auto_enhance_image(bitmap24, options);
-        if (temp) {
-            FreeImage_Unload(bitmap24);
-            enhanced = temp;
-        }
-    }
-    
-    // Get image properties
-    int width = FreeImage_GetWidth(enhanced);
-    int height = FreeImage_GetHeight(enhanced);
-    int pitch = FreeImage_GetPitch(enhanced);
-    
-    // Create SDL surface with BGR24 format
-    SDL_Surface *surface = SDL_CreateSurface(width, height, SDL_PIXELFORMAT_BGR24);
-    if (!surface) {
-        fprintf(stderr, "Failed to create SDL surface: %s\n", SDL_GetError());
-        FreeImage_Unload(enhanced);
+    return bitmap24;
+}
+
+SDL_Surface* create_surface(FIBITMAP *bitmap, ImageProcessingOptions *options) {
+    if (!bitmap || !freeimage_initialized) {
         return NULL;
     }
     
-    // Copy pixel data (FreeImage uses BGR, SDL expects BGR)
-    BYTE *src_bits = FreeImage_GetBits(enhanced);
-    uint8_t *dst_pixels = (uint8_t*)surface->pixels;
+    // Get image properties
+    int width = FreeImage_GetWidth(bitmap);
+    int height = FreeImage_GetHeight(bitmap);
+    int pitch = FreeImage_GetPitch(bitmap);
     
-    for (int y = 0; y < height; y++) {
-        BYTE *src_line = src_bits + (height - 1 - y) * pitch; // FreeImage is upside down
-        uint8_t *dst_line = dst_pixels + y * surface->pitch;
-        memcpy(dst_line, src_line, width * 3); // 3 bytes per pixel (BGR)
+    // Create SDL surface with BGR24 format
+    SDL_Surface *surface = SDL_CreateSurfaceFrom(width, height, SDL_PIXELFORMAT_BGR24, FreeImage_GetBits(bitmap), pitch);
+    if (!surface) {
+        fprintf(stderr, "Failed to create SDL surface: %s\n", SDL_GetError());
+        FreeImage_Unload(bitmap);
+        return NULL;
     }
-    
-    FreeImage_Unload(enhanced);
-    return surface;
-}
 
-void image_free(Image *image) {
-    if (image) {
-        if (image->data) {
-            free(image->data);
-        }
-        free(image);
+    // Apply enhancements on the SDL_Surface
+    if (options->enhancement_enabled) {
+        auto_enhance_image(surface, options);
     }
+
+    return surface;
 }
 
 const char** image_get_supported_extensions(void) {

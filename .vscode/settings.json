@@ -32,6 +32,14 @@
         "array": "c",
         "string": "c",
         "string_view": "c",
-        "span": "c"
+        "span": "c",
+        "image_processor.h": "c",
+        "image_loader.h": "c",
+        "functional": "c",
+        "bitset": "c",
+        "vector": "c",
+        "sstream": "c",
+        "regex": "c",
+        "tuple": "c"
     }
 }

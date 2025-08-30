@@ -17,9 +17,6 @@
 typedef struct {
     char *path;               // Path to the image
     SDL_Surface *surface;     // Loaded surface
-    SDL_Texture *texture;     // Loaded texture
-    float width;                // Original image width
-    float height;               // Original image height
     SDL_FRect crop_rect;       // Crop rectangle for the image
 } ImageEntry;
 
@@ -60,8 +57,11 @@ typedef struct ImageView {
     int total_width;                            // Total width of the view
     int max_height;                             // Max height of the view
     SDL_FRect crop_rect;                        // Crop rectangle for the view
+    SDL_Texture *texture;                       // Loaded texture
     struct ImageView *next;                     // Pointer to next view in linked list
     struct ImageView *prev;                     // Pointer to previous view in linked list
+    SDL_Color left_edge_color;                // Dominant color on the left edge
+    SDL_Color right_edge_color;               // Dominant color on the right edge
 } ImageView;
 
 // Define the ViewerState struct

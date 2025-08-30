@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
+#include <SDL3/SDL.h>
 
 ImageProcessingOptions* get_default_processing_options(void) {
     ImageProcessingOptions* options = malloc(sizeof(ImageProcessingOptions));
@@ -19,161 +20,178 @@ ImageProcessingOptions* get_default_processing_options(void) {
     return options;
 }
 
-FIBITMAP* adjust_gamma_brightness_contrast(FIBITMAP* bitmap, double gamma, double brightness, double contrast) {
-    if (!bitmap || gamma <= 0) return NULL;
-    
-    FIBITMAP* result = FreeImage_Clone(bitmap);
-    if (!result) return NULL;
-
-    if (FreeImage_AdjustGamma(result, gamma) &&
-        FreeImage_AdjustBrightness(result, brightness) &&
-        FreeImage_AdjustContrast(result, contrast)) {
-        return result;
+// Helper to get a pixel value from a surface
+static Uint32 get_pixel(SDL_Surface *surface, int x, int y) {
+    const SDL_PixelFormatDetails *fmt = SDL_GetPixelFormatDetails(surface->format);
+    int bpp = fmt->bytes_per_pixel;
+    Uint8 *p = (Uint8 *)surface->pixels + y * surface->pitch + x * bpp;
+    switch (bpp) {
+        case 1: return *p;
+        case 2: return *(Uint16 *)p;
+        case 3:
+            if (SDL_BYTEORDER == SDL_BIG_ENDIAN) return p[0] << 16 | p[1] << 8 | p[2];
+            else return p[0] | p[1] << 8 | p[2] << 16;
+        case 4: return *(Uint32 *)p;
+        default: return 0;
     }
-    
-    FreeImage_Unload(result);
-    return NULL;
 }
 
-FIBITMAP* adjust_saturation(FIBITMAP* bitmap, double saturation) {
-    if (!bitmap) return NULL;
-    
-    FIBITMAP* result = FreeImage_Clone(bitmap);
-    if (!result) return NULL;
-    
-    // Convert saturation from 0.0-2.0 to -100 to 100 range
-    double sat_percent = (saturation - 1.0) * 100.0;
-    
-    if (FreeImage_AdjustColors(result, 0, 0, sat_percent, FALSE)) {
-        return result;
+// Helper to put a pixel value to a surface
+static void put_pixel(SDL_Surface *surface, int x, int y, Uint32 pixel) {
+    const SDL_PixelFormatDetails *fmt = SDL_GetPixelFormatDetails(surface->format);
+    int bpp = fmt->bytes_per_pixel;
+    Uint8 *p = (Uint8 *)surface->pixels + y * surface->pitch + x * bpp;
+    switch (bpp) {
+        case 1: *p = pixel; break;
+        case 2: *(Uint16 *)p = pixel; break;
+        case 3:
+            if (SDL_BYTEORDER == SDL_BIG_ENDIAN) {
+                p[0] = (pixel >> 16) & 0xff;
+                p[1] = (pixel >> 8) & 0xff;
+                p[2] = pixel & 0xff;
+            } else {
+                p[0] = pixel & 0xff;
+                p[1] = (pixel >> 8) & 0xff;
+                p[2] = (pixel >> 16) & 0xff;
+            }
+            break;
+        case 4: *(Uint32 *)p = pixel; break;
     }
-    
-    FreeImage_Unload(result);
-    return NULL;
 }
 
-FIBITMAP* auto_color_balance(FIBITMAP* bitmap) {
-    if (!bitmap) return NULL;
-    
-    FIBITMAP* result = FreeImage_Clone(bitmap);
-    if (!result) return NULL;
-    
-    // Get image statistics for auto white balance
-    int width = FreeImage_GetWidth(result);
-    int height = FreeImage_GetHeight(result);
-    
-    if (width == 0 || height == 0) {
-        FreeImage_Unload(result);
-        return NULL;
+
+void adjust_gamma_brightness_contrast(SDL_Surface* surface, double gamma, double brightness, double contrast) {
+    if (!surface) return;
+
+    SDL_LockSurface(surface);
+
+    int width = surface->w;
+    int height = surface->h;
+    const SDL_PixelFormatDetails* fmt = SDL_GetPixelFormatDetails(surface->format);
+    const SDL_Palette *palette = SDL_GetSurfacePalette(surface);
+    double contrast_factor = (100.0 + contrast) / 100.0;
+    contrast_factor *= contrast_factor;
+
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            Uint32 pixel = get_pixel(surface, x, y);
+            Uint8 r, g, b, a;
+            SDL_GetRGBA(pixel, fmt, palette, &r, &g, &b, &a);
+
+            // Apply brightness
+            double new_r = r + brightness;
+            double new_g = g + brightness;
+            double new_b = b + brightness;
+
+            // Apply contrast
+            new_r = (new_r - 128) * contrast_factor + 128;
+            new_g = (new_g - 128) * contrast_factor + 128;
+            new_b = (new_b - 128) * contrast_factor + 128;
+
+            // Apply gamma
+            if (gamma != 1.0 && gamma > 0) {
+                new_r = pow(new_r / 255.0, 1.0 / gamma) * 255.0;
+                new_g = pow(new_g / 255.0, 1.0 / gamma) * 255.0;
+                new_b = pow(new_b / 255.0, 1.0 / gamma) * 255.0;
+            }
+
+            // Clamp values
+            r = (Uint8)fmax(0, fmin(255, new_r));
+            g = (Uint8)fmax(0, fmin(255, new_g));
+            b = (Uint8)fmax(0, fmin(255, new_b));
+
+            put_pixel(surface, x, y, SDL_MapRGBA(fmt, palette, r, g, b, a));
+        }
     }
+
+    SDL_UnlockSurface(surface);
+}
+
+void adjust_saturation(SDL_Surface* surface, double saturation) {
+    // Stub: Saturation adjustment is complex and requires HSL/HSV conversion.
+    if (!surface) return;
     
-    // Simple auto white balance using gray world assumption
+    
+}
+
+void auto_color_balance(SDL_Surface* surface) {
+    SDL_LockSurface(surface);
+
+    int width = surface->w;
+    int height = surface->h;
+    const SDL_PixelFormatDetails* fmt = SDL_GetPixelFormatDetails(surface->format);
+    const SDL_Palette *palette = SDL_GetSurfacePalette(surface);
+
     unsigned long r_sum = 0, g_sum = 0, b_sum = 0;
-    unsigned long pixel_count = 0;
+    unsigned long pixel_count = width * height;
+
+    // First pass: calculate averages using direct memory access
+    Uint32 *pixels = (Uint32 *)surface->pixels;
+    int pitch_in_pixels = surface->pitch / sizeof(Uint32);
     
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++) {
-            RGBQUAD color;
-            if (FreeImage_GetPixelColor(result, x, y, &color)) {
-                r_sum += color.rgbRed;
-                g_sum += color.rgbGreen;
-                b_sum += color.rgbBlue;
-                pixel_count++;
-            }
+            Uint32 pixel = pixels[y * pitch_in_pixels + x];
+            Uint8 r, g, b, a;
+            SDL_GetRGBA(pixel, fmt, palette, &r, &g, &b, &a);
+            r_sum += r;
+            g_sum += g;
+            b_sum += b;
         }
     }
-    
+
     if (pixel_count > 0) {
         double r_avg = (double)r_sum / pixel_count;
         double g_avg = (double)g_sum / pixel_count;
         double b_avg = (double)b_sum / pixel_count;
         double gray_avg = (r_avg + g_avg + b_avg) / 3.0;
-        
-        // Calculate correction factors
-        double r_factor = gray_avg / r_avg;
-        double g_factor = gray_avg / g_avg;
-        double b_factor = gray_avg / b_avg;
-        
-        // Limit correction to reasonable bounds
-        r_factor = fmax(0.5, fmin(2.0, r_factor));
-        g_factor = fmax(0.5, fmin(2.0, g_factor));
-        b_factor = fmax(0.5, fmin(2.0, b_factor));
-        
-        // Apply color correction
-        for (int y = 0; y < height; y++) {
-            for (int x = 0; x < width; x++) {
-                RGBQUAD color;
-                if (FreeImage_GetPixelColor(result, x, y, &color)) {
-                    color.rgbRed = (BYTE)fmin(255, color.rgbRed * r_factor);
-                    color.rgbGreen = (BYTE)fmin(255, color.rgbGreen * g_factor);
-                    color.rgbBlue = (BYTE)fmin(255, color.rgbBlue * b_factor);
-                    FreeImage_SetPixelColor(result, x, y, &color);
+
+        if (r_avg > 0 && g_avg > 0 && b_avg > 0) {
+            double r_factor = gray_avg / r_avg;
+            double g_factor = gray_avg / g_avg;
+            double b_factor = gray_avg / b_avg;
+
+            // Second pass: apply color balance using direct memory access
+            for (int y = 0; y < height; y++) {
+                for (int x = 0; x < width; x++) {
+                    Uint32 pixel = pixels[y * pitch_in_pixels + x];
+                    Uint8 r, g, b, a;
+                    SDL_GetRGBA(pixel, fmt, palette, &r, &g, &b, &a);
+                    
+                    r = (Uint8)fmin(255, r * r_factor);
+                    g = (Uint8)fmin(255, g * g_factor);
+                    b = (Uint8)fmin(255, b * b_factor);
+
+                    pixels[y * pitch_in_pixels + x] = SDL_MapRGBA(fmt, palette, r, g, b, a);
                 }
             }
         }
     }
-    
-    return result;
+
+    SDL_UnlockSurface(surface);
 }
 
-FIBITMAP* sharpen_image(FIBITMAP* bitmap, double amount) {
-    if (!bitmap) return NULL;
+void sharpen_image(SDL_Surface* surface, double amount) {
+    if (!surface) return;
+    // Stub: Sharpening requires convolution which is non-trivial.
     
-    // Use a simple convolution kernel for sharpening since UnsharpMask may not be available
-    FIBITMAP* result = FreeImage_Clone(bitmap);
-    if (!result) return NULL;
-
-    
-    // For now, return the clone - implement custom sharpening later if needed
-    return result;
 }
 
-FIBITMAP* auto_enhance_image(FIBITMAP* bitmap, ImageProcessingOptions* options) {
-    if (!options || !options->enhancement_enabled) {
-        return NULL;
-    }
-    
-    FIBITMAP* current = FreeImage_Clone(bitmap);
-    if (!current) return NULL;
+void auto_enhance_image(SDL_Surface* surface, const ImageProcessingOptions* options) {
 
-    if (options->auto_levels) {
-        // Step 1: Auto normalize - apply histogram stretching
-        // For now, skip auto normalize and use other enhancements
-    }
-    
-    // Step 2: Auto color balance
-    FIBITMAP* balanced = auto_color_balance(current);
-    if (balanced) {
-        FreeImage_Unload(current);
-        current = balanced;
-    }
-    
-    if (options->sharpen) {
-        // Step 2: Apply sharpening if enabled
-        FIBITMAP* sharpened = sharpen_image(current, 1.0); // Default amount of 1.0
-        if (sharpened) {
-            FreeImage_Unload(current);
-            current = sharpened;
-        }
+    if (options->color_balance) {
+        auto_color_balance(surface);
     }
 
     if (options->gamma != 1.0 || options->brightness != 0.0 || options->contrast != 0.0) {
-        // Step 3: Adjust gamma, brightness, and contrast
-        FIBITMAP* adjusted = adjust_gamma_brightness_contrast(current, options->gamma, options->brightness, options->contrast);
-        if (adjusted) {
-            FreeImage_Unload(current);
-            current = adjusted;
-        }
+        adjust_gamma_brightness_contrast(surface, options->gamma, options->brightness, options->contrast);
     }
     
     if (options->saturation != 1.0) {
-        // Step 4: Adjust saturation
-        FIBITMAP* saturated = adjust_saturation(current, options->saturation);
-        if (saturated) {
-            FreeImage_Unload(current);
-            current = saturated;
-        }
+        adjust_saturation(surface, options->saturation);
     }
-    
-    return current;
+
+    if (options->sharpen) {
+        sharpen_image(surface, 1.0);
+    }
 }

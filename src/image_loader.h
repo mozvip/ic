@@ -11,8 +11,9 @@ bool image_loader_init(void);
 // Cleanup FreeImage library
 void image_loader_cleanup(void);
 
-// Load image from file and return SDL_Surface (replacement for IMG_Load)
-SDL_Surface* image_load_surface(const char *filename, ImageProcessingOptions *options);
+// Load an image from file
+FIBITMAP *load_image_file(const char *filename);
+SDL_Surface* create_surface(FIBITMAP *bitmap, ImageProcessingOptions *options);
 
 // Check if file extension is supported
 bool image_is_supported(const char *filename);
