@@ -37,12 +37,21 @@ static void display_info();
 static bool prepare_image(int index);
 static void unload_image(int index);
 static void toggle_fullscreen(void);
+static void view_changed(ImageView *old_view_node, ImageView *new_view_node);
 static SDL_Color get_dominant_color(SDL_Surface *surface, int x, int y, int width, int height);
-static void analyze_image_left_edge(SDL_Surface *surface, SDL_Color *left_color);
-static void analyze_image_right_edge(SDL_Surface *surface, SDL_Color *right_color);
+static void analyze_image_left_edge(SDL_Surface *surface, SDL_FRect *crop_rect, SDL_Color *left_color);
+static void analyze_image_right_edge(SDL_Surface *surface, SDL_FRect *crop_rect, SDL_Color *right_color);
 static SDL_Texture* render_text(const char *text, SDL_Color color);
 static bool select_monitor(int monitor_index, int *x, int *y);
-static void create_texture(SDL_Renderer *renderer, ImageView *view);
+// Preload thread function and starter
+static int load_view_surfaces_in_thread(void *data);
+static void init_view(ImageView *view);
+// Structure sent from worker thread to main thread when preload surfaces are ready
+typedef struct PreloadResult {
+    ImageView *view;
+    SDL_Surface *surface;
+} PreloadResult;
+static void create_texture(SDL_Renderer *renderer, ImageView *view, SDL_Surface *surface);
 static void update_progress(float progress, const char *message);
 static void generate_default_views(void);
 static void previous_view(void);
@@ -50,20 +59,10 @@ static void next_view(void);
 void free_view_texture(ImageView *view) ;
 
 // Linked list helper functions
-static ImageView* create_view_node(ImageView *prev_view);
+static ImageView* create_view_node_after(ImageView *prev_view);
 static void append_view(ImageView *view);
 static void free_all_views(void);
 static ImageView* get_view_by_index(int index);
-
-// Compatibility functions for the linked list implementation
-static void set_current_view(int index) {
-    ImageView *view = get_view_by_index(index);
-    if (view) {
-        viewer.current_view_node = view;
-        viewer.current_view_index = index;
-        create_texture(viewer.renderer, view);
-    }
-}
 
 static int get_current_view(void) {
     return viewer.current_view_index;
@@ -189,7 +188,7 @@ static void hsl_to_rgb(float h, float s, float l, float *r, float *g, float *b) 
 }
 
 // Function to render a horizontal gradient using HSL interpolation
-static void render_horizontal_gradient_hsl(SDL_Renderer *renderer, SDL_FRect rect, SDL_Color edge_color_rgb, bool edge_color_is_on_left_of_fill) {
+static void render_horizontal_gradient_hsl(SDL_Renderer *renderer, SDL_Rect rect, SDL_Color edge_color_rgb, bool edge_color_is_on_left_of_fill) {
     if (rect.w <= 0) return; // Do not render if width is zero or negative
 
     float r_edge = edge_color_rgb.r / 255.0f;
@@ -374,6 +373,9 @@ bool comic_viewer_init(int monitor_index) {
         viewer.images[i].surface = NULL;
     }
 
+    // Register a user event type for preload completion
+    viewer.preload_event_type = SDL_RegisterEvents(1);
+
     return true;
 }
 
@@ -434,8 +436,7 @@ bool comic_viewer_load(const char *path) {
     return result;
 }
 
-void unload_images_for_view(int view_index) {
-    ImageView *view = get_view_by_index(view_index);
+void unload_view(ImageView *view) {
     if (!view) return;
 
     // Unload images for the specified view
@@ -444,11 +445,7 @@ void unload_images_for_view(int view_index) {
         unload_image(img_index);
     }
     // Free the texture if it exists
-    free_view_texture(view);
-}
-
-void free_view_texture(ImageView *view) {
-    if (view && view->texture) {
+    if (view->texture) {
         SDL_DestroyTexture(view->texture);
         view->texture = NULL;
     }
@@ -464,10 +461,12 @@ void comic_viewer_run(void) {
     options = get_default_processing_options();
 
     // Load images for the current view
-    create_texture(viewer.renderer, viewer.current_view_node);
-    // Preload images for the next view if available
+    init_view(viewer.current_view_node);
+    // wait for first view to be loaded
+    SDL_WaitThread(viewer.load_thread, NULL);
+    // Async preload images for the next view if available
     if (viewer.current_view_node->next) {
-        create_texture(viewer.renderer, viewer.current_view_node->next);
+        init_view(viewer.current_view_node->next);
     }
     viewer.running = true;
 
@@ -524,17 +523,14 @@ static bool prepare_image(int index) {
 
 static void unload_image(int index) {
     if (index < 0 || index >= viewer.image_count) return;
-    
+
     if (viewer.images[index].surface) {
         SDL_DestroySurface(viewer.images[index].surface);
         viewer.images[index].surface = NULL;
     }
-    
-    // In on-demand mode, we can also free the path to save memory
-    // (it will be re-extracted if needed)
-    if (viewer.archive && viewer.images[index].path) {
-        free(viewer.images[index].path);
-        viewer.images[index].path = NULL;
+    if (viewer.images[index].bitmap) {
+        FreeImage_Unload(viewer.images[index].bitmap);
+        viewer.images[index].bitmap = NULL;
     }
 }
 
@@ -543,6 +539,25 @@ static void handle_events(void) {
     
     while (SDL_PollEvent(&event)) {
         switch (event.type) {
+                case SDL_EVENT_USER: {
+                    // Handle surface loading completion events
+                    if (event.type == viewer.preload_event_type) {
+                        PreloadResult *res = (PreloadResult *)event.user.data1;
+                        if (res && res->view && res->surface) {
+                            ImageView *view = res->view;
+                            if (viewer.load_thread) {
+                                SDL_WaitThread(viewer.load_thread, NULL);
+                                viewer.load_thread = NULL; // Clear the thread handle
+                            }
+                            // Create texture from the loaded surface
+                            create_texture(viewer.renderer, view, res->surface);
+                            // Free the surface now that texture is created
+                            SDL_DestroySurface(res->surface);
+                        }
+                        free(res);
+                    }
+                }
+                break;
             case SDL_EVENT_QUIT:
                 viewer.running = false;
                 break;
@@ -589,45 +604,41 @@ static void handle_events(void) {
                         // save link to the next view node
                         ImageView *backup_next_view = viewer.current_view_node->next;
                         // insert a new view node after the current one
-                        viewer.current_view_node->next = create_view_node(viewer.current_view_node);
+                        viewer.current_view_node->next = create_view_node_after(viewer.current_view_node);
                         viewer.current_view_node->next->image_indices[0] = viewer.current_view_node->image_indices[1];
                         viewer.current_view_node->next->next = backup_next_view;
                         if (backup_next_view) {
                             backup_next_view->prev = viewer.current_view_node->next;
                         }
-
-                        free_view_texture(viewer.current_view_node);
-                        create_texture(viewer.renderer, viewer.current_view_node);
+                        unload_view(viewer.current_view_node);
+                        unload_view(viewer.current_view_node->next);
+                        view_changed(NULL, viewer.current_view_node);
 
                         break;
 
-                    case SDLK_2:
-                        if (viewer.current_view_node->count == 2) {
-                            // This view is already in double image mode
-                            break;
-                        }
-                        // check if we are not already displaying the last image
-                        if (viewer.current_view_node->next) {
-                            ImageView *next_view = viewer.current_view_node->next;
+                    case SDLK_2: 
+                        {
+                            if (viewer.current_view_node->count == 2 || !viewer.current_view_node->next) {
+                                // This view is already in double image mode or there is no next image to pair with
+                                break;
+                            }
+
                             // the current view now has 2 images
                             viewer.current_view_node->count = 2;
                             // the second image of the current view is the first image of the next view
-                            viewer.current_view_node->image_indices[1] = next_view->image_indices[0];
+                            ImageView *old_next_view = viewer.current_view_node->next;
+                            viewer.current_view_node->image_indices[1] = old_next_view->image_indices[0];
                             // ensure the image is loaded
                             if (viewer.images[viewer.current_view_node->image_indices[1]].surface == NULL) {
                                 prepare_image(viewer.current_view_node->image_indices[1]);
                             }
                             // remove the next view from the linked list
-                            if (next_view) {
-                                viewer.current_view_node->next = next_view->next;
-                                if (next_view->next) {
-                                    next_view->next->prev = viewer.current_view_node;
-                                    viewer.current_view_node->next = next_view->next;
-                                }
+                            viewer.current_view_node->next = old_next_view->next;
+                            if (old_next_view->next) {
+                                old_next_view->next->prev = viewer.current_view_node;
                             }
-
-                            free_view_texture(viewer.current_view_node);
-                            create_texture(viewer.renderer, viewer.current_view_node);
+                            unload_view(viewer.current_view_node);
+                            view_changed(old_next_view, viewer.current_view_node);
                         }
                         break;
                         
@@ -646,36 +657,18 @@ static void handle_events(void) {
                     case SDLK_HOME:
                         // First image
                         if (get_current_view() != 0) {
-                            // Clean up any loaded textures except the first one
-                            int view_count = get_view_count();
-                            for (int i = 1; i < view_count; i++) {
-                                unload_images_for_view(i);
-                            }
-                            set_current_view(0);
-
-                            // Preload the next image
-                            if (view_count > 1) {
-                                create_texture(viewer.renderer, get_view_by_index(get_current_view() + 1));
-                            }
+                            view_changed(viewer.first_view, viewer.current_view_node);
                         }
                         break;
                         
                     case SDLK_END:
                         // Last image
                         {
-                            int view_count = get_view_count();
-                            if (get_current_view() != view_count - 1) {
-                                // Clean up any loaded textures except the last one
-                                for (int i = 0; i < view_count - 1; i++) {
-                                    unload_images_for_view(i);
-                                }
-                                set_current_view(view_count - 1);
-
-                                // Preload the previous image
-                                if (view_count > 1) {
-                                    create_texture(viewer.renderer, get_view_by_index(get_current_view() - 1));
-                                }
+                            ImageView *last_view = viewer.first_view;
+                            while (last_view->next) {
+                                last_view = last_view->next;
                             }
+                            view_changed(last_view, viewer.current_view_node);
                         }
                         break;
 
@@ -727,8 +720,8 @@ static void handle_events(void) {
                         {
                             options->enhancement_enabled = !options->enhancement_enabled;
                             // Force reload of only the currently visible images to apply/remove enhancements
-                            unload_images_for_view(get_current_view());
-                            create_texture(viewer.renderer, viewer.current_view_node);
+                            unload_view(viewer.current_view_node);
+                            init_view(viewer.current_view_node);
                         }
                         break;
 
@@ -742,8 +735,8 @@ static void handle_events(void) {
                                 options->contrast += 5;
                                 if (options->contrast > 100) options->contrast = 100;
                             }
-                            unload_images_for_view(get_current_view());
-                            create_texture(viewer.renderer, viewer.current_view_node);
+                            unload_view(viewer.current_view_node);
+                            init_view(viewer.current_view_node);
                         }
                         break;
 
@@ -757,8 +750,8 @@ static void handle_events(void) {
                                 options->brightness += 5;
                                 if (options->brightness > 100) options->brightness = 100;
                             }
-                            unload_images_for_view(get_current_view());
-                            create_texture(viewer.renderer, viewer.current_view_node);
+                            unload_view(viewer.current_view_node);
+                            init_view(viewer.current_view_node);
                         }
                         break;
 
@@ -772,8 +765,8 @@ static void handle_events(void) {
                                 options->gamma += 0.1;
                                 if (options->gamma > 3.0) options->gamma = 3.0;
                             }
-                            unload_images_for_view(get_current_view());
-                            create_texture(viewer.renderer, viewer.current_view_node);
+                            unload_view(viewer.current_view_node);
+                            init_view(viewer.current_view_node);
                         }
                         break;
                 }
@@ -809,8 +802,13 @@ static void render_current_view(void) {
     SDL_RenderClear(viewer.renderer);
 
     ImageView *current_display_view = viewer.current_view_node;
-    if (!current_display_view) return;
-    
+    if (!current_display_view->texture) {
+        // No image to display
+        display_info();
+        SDL_RenderPresent(viewer.renderer);
+        return;
+    }
+
     float display_area_width = (float)viewer.drawable_width;
     float display_area_height = (float)viewer.drawable_height;
 
@@ -872,15 +870,15 @@ static void render_current_view(void) {
             overall_content_end_x = x_pos_render + scaled_width;
         }
 
-        SDL_FRect dest_rect = {x_pos_render, y_pos_render, (float)scaled_width, (float)scaled_height};
+        SDL_FRect dest_rect = {x_pos_render, y_pos_render, scaled_width, scaled_height};
         SDL_RenderTexture(viewer.renderer, current_display_view->texture, &current_display_view->crop_rect, &dest_rect);
 
-        SDL_FRect left_rect_gradient = {0, 0, overall_content_start_x, display_area_height};
+        SDL_Rect left_rect_gradient = {0, 0, overall_content_start_x, display_area_height};
         if (left_rect_gradient.w > 0.5f) { // Use a small threshold for float comparison
             render_horizontal_gradient_hsl(viewer.renderer, left_rect_gradient, current_display_view->left_edge_color, false);
         }
 
-        SDL_FRect right_rect_gradient = {overall_content_end_x, 0,
+        SDL_Rect right_rect_gradient = {overall_content_end_x, 0,
                                     display_area_width - overall_content_end_x,
                                     display_area_height};
         if (right_rect_gradient.w > 0.5f) {
@@ -898,7 +896,7 @@ void display_info()
 {
     // Only show progress indicator if we have more than one image
     if (viewer.image_count <= 1) return;
-       
+
     // Check if we should display the progress indicator
     Uint64 current_time = SDL_GetTicks();
     Uint64 elapsed_time = current_time - viewer.last_page_change_time;
@@ -948,22 +946,9 @@ void display_info()
 }
 
 static void free_resources(void) {
-    // Free image resources
-    for (int i = 0; i < viewer.image_count; i++) {
-        if (viewer.images[i].surface) {
-            SDL_DestroySurface(viewer.images[i].surface);
-            viewer.images[i].surface = NULL;
-        }
-        free(viewer.images[i].path);
-        viewer.images[i].path = NULL;
-    }
-
     // iterate over views
     for (ImageView *view = viewer.first_view; view; view = view->next) {
-        if (view->texture) {
-            SDL_DestroyTexture(view->texture);
-            view->texture = NULL;
-        }
+        unload_view(view);
     }
 
     // Free source path
@@ -991,230 +976,12 @@ static void free_resources(void) {
     }
 }
 
-static void toggle_fullscreen(void) {
-    viewer.fullscreen = !viewer.fullscreen;
-    
-    if (viewer.fullscreen) {
-        // In SDL3, fullscreen is set with SDL_SetWindowFullscreen(window, SDL_TRUE)
-        SDL_SetWindowFullscreen(viewer.window, true);
-    } else {
-        SDL_SetWindowFullscreen(viewer.window, false);
-        
-        // When exiting fullscreen, ensure window goes back to the correct monitor
-        if (viewer.monitor_index >= 0) {
-            int x, y;
-            if (select_monitor(viewer.monitor_index, &x, &y)) {
-                // Position the window at the center of the selected monitor
-                SDL_Rect bounds;
-                if (SDL_GetDisplayBounds(viewer.monitor_index, &bounds) == 0) {
-                    int center_x = bounds.x + (bounds.w - viewer.window_width) / 2;
-                    int center_y = bounds.y + (bounds.h - viewer.window_height) / 2;
-                    SDL_SetWindowPosition(viewer.window, center_x, center_y);
-                } else {
-                    // Fall back to the monitor origin if we can't get bounds
-                    SDL_SetWindowPosition(viewer.window, x, y);
-                }
-            }
-        }
-    }
-    
-    // Update drawable size after toggling fullscreen
-    SDL_GetWindowSizeInPixels(viewer.window, &viewer.drawable_width, &viewer.drawable_height);
-    SDL_GetWindowSize(viewer.window, &viewer.window_width, &viewer.window_height);
-
-    // Re-apply the logical size after toggling fullscreen to maintain HiDPI settings
-    if (viewer.renderer) {       
-        // Only set logical size if there's a difference (HiDPI)
-        if (viewer.drawable_width != viewer.window_width || viewer.drawable_height != viewer.window_height) {
-            SDL_SetRenderLogicalPresentation(viewer.renderer, 
-                                            viewer.window_width, 
-                                            viewer.window_height,
-                                            SDL_LOGICAL_PRESENTATION_LETTERBOX);
-        }
-    }
-}
-
-// Function to get the most prominent color from a surface region
-static SDL_Color get_dominant_color(SDL_Surface *surface, int x, int y, int width, int height) {
-    // Default color (black)
-    SDL_Color dominant = {0, 0, 0, 255};
-    
-    // Use a different approach to avoid the large array allocation
-    // We'll use color buckets with fewer bits per channel
-    #define COLOR_BITS 5
-    #define COLOR_BUCKETS (1 << COLOR_BITS)
-    #define COLOR_MASK ((1 << COLOR_BITS) - 1)
-    
-    // Allocate the frequency counter on the heap instead of stack
-    unsigned int *color_freq = calloc(COLOR_BUCKETS * COLOR_BUCKETS * COLOR_BUCKETS, sizeof(unsigned int));
-    if (!color_freq) return dominant;
-    
-    unsigned int max_freq = 0;
-    int dominant_index = 0;
-    
-    // Get pixel format
-    const SDL_PixelFormatDetails *fmt = SDL_GetPixelFormatDetails(surface->format);
-    int bpp = fmt->bytes_per_pixel;
-    
-    // Scan the specified region with bounds checking
-    int sample_step = 2; // Sample every 2nd pixel to speed up analysis
-    
-    uint8_t *pixels = (uint8_t *)surface->pixels;
-    int pitch = surface->pitch;
-    
-    for (int j = y; j < y + height; j += sample_step) {
-        for (int i = x; i < x + width; i += sample_step) {
-            // Skip if outside bounds
-            if (i < 0 || i >= surface->w || j < 0 || j >= surface->h) continue;
-            
-            // Extract the pixel
-            uint8_t *p = pixels + j * pitch + i * bpp;
-            uint32_t pixel = 0;
-            
-            // Be very careful with pixel access
-            switch (bpp) {
-                case 1: pixel = *p; break;
-                case 2: pixel = *(uint16_t *)p; break;
-                case 3: 
-                    #if SDL_BYTEORDER == SDL_BIG_ENDIAN
-                        pixel = p[0] << 16 | p[1] << 8 | p[2]; 
-                    #else
-                        pixel = p[0] | p[1] << 8 | p[2] << 16; 
-                    #endif
-                    break;
-                case 4: pixel = *(uint32_t *)p; break;
-                default: continue; // Skip unknown formats
-            }
-            
-            // Convert to RGB
-            uint8_t r, g, b, a;
-            SDL_GetRGBA(pixel, fmt, SDL_GetSurfacePalette(surface), &r, &g, &b, &a);
-            
-            // Skip almost black or almost white pixels
-            if ((r < 15 && g < 15 && b < 15) || (r > 240 && g > 240 && b > 240)) {
-                continue;
-            }
-            
-            // Reduce color depth to fit in our buckets
-            r >>= (8 - COLOR_BITS);
-            g >>= (8 - COLOR_BITS);
-            b >>= (8 - COLOR_BITS);
-            
-            // Calculate bucket index
-            int bucket_index = (r * COLOR_BUCKETS * COLOR_BUCKETS) + (g * COLOR_BUCKETS) + b;
-            
-            // Increment frequency
-            color_freq[bucket_index]++;
-            if (color_freq[bucket_index] > max_freq) {
-                max_freq = color_freq[bucket_index];
-                dominant_index = bucket_index;
-            }
-        }
-    }
-    
-    // Convert bucket index back to RGB
-    if (max_freq > 0) {
-        int r = (dominant_index / (COLOR_BUCKETS * COLOR_BUCKETS)) & COLOR_MASK;
-        int g = (dominant_index / COLOR_BUCKETS) & COLOR_MASK;
-        int b = dominant_index & COLOR_MASK;
-        
-        // Convert back to 8-bit channels
-        dominant.r = (r << (8 - COLOR_BITS)) | (r >> (2 * COLOR_BITS - 8));
-        dominant.g = (g << (8 - COLOR_BITS)) | (g >> (2 * COLOR_BITS - 8));
-        dominant.b = (b << (8 - COLOR_BITS)) | (b >> (2 * COLOR_BITS - 8));
-    }
-    
-    free(color_freq);
-    return dominant;
-}
-
-// This function analyzes the image and extracts the dominant color from the left edge
-static void analyze_image_left_edge(SDL_Surface *surface, SDL_Color *left_color) {
-    // Default to black if something goes wrong
-    *left_color = (SDL_Color){0, 0, 0, 255};
-    
-    // Get image dimensions
-    int width = surface->w;
-    int height = surface->h;
-    
-    // Sample pixels from the left edge (8% of width)
-    int edge_width = width * 0.08;
-    if (edge_width < 1) edge_width = 1;
-    if (edge_width > width) edge_width = width; // Cap at image width
-
-    // Get dominant color from left edge
-    *left_color = get_dominant_color(surface, 0, 0, edge_width, height);
-}
-
-// This function analyzes the image and extracts the dominant color from the right edge
-static void analyze_image_right_edge(SDL_Surface *surface, SDL_Color *right_color) {
-    // Default to black if something goes wrong
-    *right_color = (SDL_Color){0, 0, 0, 255};
-
-    // Get image dimensions
-    int width = surface->w;
-    int height = surface->h;
-
-    // Sample pixels from the right edge (8% of width)
-    int edge_width = width * 0.08;
-    if (edge_width < 1) edge_width = 1;
-    if (edge_width > width) edge_width = width; // Cap at image width
-    
-    // Get dominant color from right edge
-    *right_color = get_dominant_color(surface, width - edge_width, 0, edge_width, height);
-}
-
-// Function to render text as a texture
-static SDL_Texture* render_text(const char *text, SDL_Color color) {
-    if (!viewer.font || !text) return NULL;
-
-    SDL_Surface *surface = TTF_RenderText_Blended(viewer.font, text, 0, color);
-    if (!surface) {
-        fprintf(stderr, "Failed to render text: %s\n", SDL_GetError());
-        return NULL;
-    }
-
-    SDL_Texture *texture = SDL_CreateTextureFromSurface(viewer.renderer, surface);
-    SDL_DestroySurface(surface);
-
-    if (!texture) {
-        fprintf(stderr, "Failed to create texture from text: %s\n", SDL_GetError());
-    }
-
-    return texture;
-}
-
-// Function to select monitor and get its position
-static bool select_monitor(int monitor_index, int *x, int *y) {
-    int num_displays;
-    SDL_DisplayID* display_id = SDL_GetDisplays(&num_displays);
-    if (num_displays <= 0) {
-        fprintf(stderr, "No video displays available: %s\n", SDL_GetError());
-        return false;
-    }
-    SDL_free(display_id);
-
-    if (monitor_index < 0 || monitor_index >= num_displays) {
-        fprintf(stderr, "Invalid monitor index: %d\n", monitor_index);
-        return false;
-    }
-
-    SDL_Rect bounds;
-    if (SDL_GetDisplayBounds(monitor_index, &bounds) != 0) {
-        fprintf(stderr, "Failed to get display bounds for monitor %d: %s\n", monitor_index, SDL_GetError());
-        return false;
-    }
-
-    *x = bounds.x;
-    *y = bounds.y;
-    return true;
-}
-
-// Helper function for high-quality image scaling with border detection and removal
-static void create_texture(SDL_Renderer *renderer, ImageView *view) {
+// Thread: decode/prepare surfaces only, then post event to main thread to create texture
+static int load_view_surfaces_in_thread(void *data) {
+    ImageView *view = (ImageView *)data;
 
     // If the image is already loaded, skip processing
-    if (view->texture) return;
+    if (view->texture) return 0;
 
     int total_width = 0;
     int max_height = 0;
@@ -1227,13 +994,21 @@ static void create_texture(SDL_Renderer *renderer, ImageView *view) {
         // Load the image file if not already loaded
         prepare_image(image_index);
 
+        if (!image->bitmap) {
+            // Load the image using FreeImage
+            image->bitmap = load_image_file(image->path);
+            if (!image->bitmap) {
+                fprintf(stderr, "Failed to load image %s with FreeImage\n", image->path);
+                return -1;
+            }
+        }
+
         if (!image->surface) {
             // Load the image as a surface using FreeImage
-            FIBITMAP *bitmap = load_image_file(image->path);
-            image->surface = create_surface(bitmap, options);
+            image->surface = create_surface(image->bitmap, options);
             if (!image->surface) {
                 fprintf(stderr, "Failed to load image %s with FreeImage\n", image->path);
-                return;
+                return -1;
             }
         }
 
@@ -1251,7 +1026,7 @@ static void create_texture(SDL_Renderer *renderer, ImageView *view) {
         surface = SDL_CreateSurface(total_width, max_height, surface->format);
         if (!surface) {
             fprintf(stderr, "Failed to create combined surface: %s\n", SDL_GetError());
-            return;
+            return -1;
         }
 
         SDL_SetSurfaceBlendMode(surface, SDL_BLENDMODE_NONE);
@@ -1264,7 +1039,7 @@ static void create_texture(SDL_Renderer *renderer, ImageView *view) {
             if (!SDL_BlitSurface(image->surface, NULL, surface, &dst_rect)) {
                 fprintf(stderr, "Failed to blit image %s: %s\n", image->path, SDL_GetError());
                 SDL_DestroySurface(surface);
-                return;
+                return -1;
             }
 
             current_x += image->surface->w;
@@ -1464,25 +1239,269 @@ static void create_texture(SDL_Renderer *renderer, ImageView *view) {
         crop_rect.h = surface->h;
     }
     view->crop_rect = crop_rect;
+    
+    // Analyze edges
+    analyze_image_left_edge(surface, &view->crop_rect, &view->left_edge_color);
+    analyze_image_right_edge(surface, &view->crop_rect, &view->right_edge_color);
 
-    // Create a texture from the surface
-    SDL_Surface *cropped_surface = SDL_CreateSurfaceFrom(right - left + 1, bottom - top + 1, surface->format, surface->pixels + top * pitch + left * bpp, pitch);
-    view->texture = SDL_CreateTextureFromSurface(renderer, cropped_surface);
+    // Post to main thread to convert surface -> texture
+    if (surface) {
+        PreloadResult *res = malloc(sizeof(PreloadResult));
+        if (res) {
+            res->view = view;
+            res->surface = surface; // transfer ownership to main thread
+
+            SDL_Event event;
+            SDL_zero(event);
+            event.type = viewer.preload_event_type;
+            event.user.data1 = res;
+            event.user.data2 = NULL;
+            SDL_PushEvent(&event);
+        } else {
+            // If allocation failed, free combined surface if we created one
+            if (view->count > 1 && surface) SDL_DestroySurface(surface);
+        }
+    }
+
+    return 0;
+}
+
+// Start worker thread to decode surfaces for the given view
+static void init_view(ImageView *view) {
+    if (view->texture) return; // already done
+    if (viewer.load_thread && SDL_GetThreadState(viewer.load_thread) == SDL_THREAD_ALIVE) {
+        // We are already loading
+        SDL_WaitThread(viewer.load_thread, NULL);
+        viewer.load_thread = NULL;
+    }
+    viewer.load_thread = SDL_CreateThread(load_view_surfaces_in_thread, "load_view_thread", (void*)view);
+}
+
+static void toggle_fullscreen(void) {
+    viewer.fullscreen = !viewer.fullscreen;
+    
+    if (viewer.fullscreen) {
+        // In SDL3, fullscreen is set with SDL_SetWindowFullscreen(window, SDL_TRUE)
+        SDL_SetWindowFullscreen(viewer.window, true);
+    } else {
+        SDL_SetWindowFullscreen(viewer.window, false);
+        
+        // When exiting fullscreen, ensure window goes back to the correct monitor
+        if (viewer.monitor_index >= 0) {
+            int x, y;
+            if (select_monitor(viewer.monitor_index, &x, &y)) {
+                // Position the window at the center of the selected monitor
+                SDL_Rect bounds;
+                if (SDL_GetDisplayBounds(viewer.monitor_index, &bounds) == 0) {
+                    int center_x = bounds.x + (bounds.w - viewer.window_width) / 2;
+                    int center_y = bounds.y + (bounds.h - viewer.window_height) / 2;
+                    SDL_SetWindowPosition(viewer.window, center_x, center_y);
+                } else {
+                    // Fall back to the monitor origin if we can't get bounds
+                    SDL_SetWindowPosition(viewer.window, x, y);
+                }
+            }
+        }
+    }
+    // Update drawable size after toggling fullscreen
+    SDL_GetWindowSizeInPixels(viewer.window, &viewer.drawable_width, &viewer.drawable_height);
+    SDL_GetWindowSize(viewer.window, &viewer.window_width, &viewer.window_height);
+
+    // Re-apply the logical size after toggling fullscreen to maintain HiDPI settings
+    if (viewer.renderer) {       
+        // Only set logical size if there's a difference (HiDPI)
+        if (viewer.drawable_width != viewer.window_width || viewer.drawable_height != viewer.window_height) {
+            SDL_SetRenderLogicalPresentation(viewer.renderer, 
+                                            viewer.window_width, 
+                                            viewer.window_height,
+                                            SDL_LOGICAL_PRESENTATION_LETTERBOX);
+        }
+    }
+}
+
+// Function to get the most prominent color from a surface region
+static SDL_Color get_dominant_color(SDL_Surface *surface, int x, int y, int width, int height) {
+    // Default color (black)
+    SDL_Color dominant = {0, 0, 0, 255};
+    
+    // Use a different approach to avoid the large array allocation
+    // We'll use color buckets with fewer bits per channel
+    #define COLOR_BITS 5
+    #define COLOR_BUCKETS (1 << COLOR_BITS)
+    #define COLOR_MASK ((1 << COLOR_BITS) - 1)
+    
+    // Allocate the frequency counter on the heap instead of stack
+    unsigned int *color_freq = calloc(COLOR_BUCKETS * COLOR_BUCKETS * COLOR_BUCKETS, sizeof(unsigned int));
+    if (!color_freq) return dominant;
+    
+    unsigned int max_freq = 0;
+    int dominant_index = 0;
+    
+    // Get pixel format
+    const SDL_PixelFormatDetails *fmt = SDL_GetPixelFormatDetails(surface->format);
+    int bpp = fmt->bytes_per_pixel;
+    
+    // Scan the specified region with bounds checking
+    int sample_step = 2; // Sample every 2nd pixel to speed up analysis
+    
+    uint8_t *pixels = (uint8_t *)surface->pixels;
+    int pitch = surface->pitch;
+    
+    for (int j = y; j < y + height; j += sample_step) {
+        for (int i = x; i < x + width; i += sample_step) {
+            // Skip if outside bounds
+            if (i < 0 || i >= surface->w || j < 0 || j >= surface->h) continue;
+            
+            // Extract the pixel
+            uint8_t *p = pixels + j * pitch + i * bpp;
+            uint32_t pixel = 0;
+            
+            // Be very careful with pixel access
+            switch (bpp) {
+                case 1: pixel = *p; break;
+                case 2: pixel = *(uint16_t *)p; break;
+                case 3: 
+                    #if SDL_BYTEORDER == SDL_BIG_ENDIAN
+                        pixel = p[0] << 16 | p[1] << 8 | p[2]; 
+                    #else
+                        pixel = p[0] | p[1] << 8 | p[2] << 16; 
+                    #endif
+                    break;
+                case 4: pixel = *(uint32_t *)p; break;
+                default: continue; // Skip unknown formats
+            }
+            
+            // Convert to RGB
+            uint8_t r, g, b, a;
+            SDL_GetRGBA(pixel, fmt, SDL_GetSurfacePalette(surface), &r, &g, &b, &a);
+            
+            // Skip almost black or almost white pixels
+            if ((r < 15 && g < 15 && b < 15) || (r > 240 && g > 240 && b > 240)) {
+                continue;
+            }
+            
+            // Reduce color depth to fit in our buckets
+            r >>= (8 - COLOR_BITS);
+            g >>= (8 - COLOR_BITS);
+            b >>= (8 - COLOR_BITS);
+            
+            // Calculate bucket index
+            int bucket_index = (r * COLOR_BUCKETS * COLOR_BUCKETS) + (g * COLOR_BUCKETS) + b;
+            
+            // Increment frequency
+            color_freq[bucket_index]++;
+            if (color_freq[bucket_index] > max_freq) {
+                max_freq = color_freq[bucket_index];
+                dominant_index = bucket_index;
+            }
+        }
+    }
+    
+    // Convert bucket index back to RGB
+    if (max_freq > 0) {
+        int r = (dominant_index / (COLOR_BUCKETS * COLOR_BUCKETS)) & COLOR_MASK;
+        int g = (dominant_index / COLOR_BUCKETS) & COLOR_MASK;
+        int b = dominant_index & COLOR_MASK;
+        
+        // Convert back to 8-bit channels
+        dominant.r = (r << (8 - COLOR_BITS)) | (r >> (2 * COLOR_BITS - 8));
+        dominant.g = (g << (8 - COLOR_BITS)) | (g >> (2 * COLOR_BITS - 8));
+        dominant.b = (b << (8 - COLOR_BITS)) | (b >> (2 * COLOR_BITS - 8));
+    }
+    
+    free(color_freq);
+    return dominant;
+}
+
+// This function analyzes the image and extracts the dominant color from the left edge
+static void analyze_image_left_edge(SDL_Surface *surface, SDL_FRect *crop_rect, SDL_Color *left_color) {
+    // Default to black if something goes wrong
+    *left_color = (SDL_Color){0, 0, 0, 255};
+    
+    // Get image dimensions
+    int width = crop_rect->w;
+    int height = crop_rect->h;
+
+    // Sample pixels from the left edge (8% of width)
+    int edge_width = width * 0.08;
+    if (edge_width < 1) edge_width = 1;
+    if (edge_width > width) edge_width = width; // Cap at image width
+
+    // Get dominant color from left edge
+    *left_color = get_dominant_color(surface, crop_rect->x, crop_rect->y, edge_width, height);
+}
+
+// This function analyzes the image and extracts the dominant color from the right edge
+static void analyze_image_right_edge(SDL_Surface *surface, SDL_FRect *crop_rect, SDL_Color *right_color) {
+    // Default to black if something goes wrong
+    *right_color = (SDL_Color){0, 0, 0, 255};
+
+    // Get image dimensions
+    int width = crop_rect->w;
+    int height = crop_rect->h;
+
+    // Sample pixels from the right edge (8% of width)
+    int edge_width = width * 0.08;
+    if (edge_width < 1) edge_width = 1;
+    if (edge_width > width) edge_width = width; // Cap at image width
+    
+    // Get dominant color from right edge
+    *right_color = get_dominant_color(surface, crop_rect->x + crop_rect->w - edge_width, crop_rect->y, edge_width, height);
+}
+
+// Function to render text as a texture
+static SDL_Texture* render_text(const char *text, SDL_Color color) {
+    if (!viewer.font || !text) return NULL;
+
+    SDL_Surface *surface = TTF_RenderText_Blended(viewer.font, text, 0, color);
+    if (!surface) {
+        fprintf(stderr, "Failed to render text: %s\n", SDL_GetError());
+        return NULL;
+    }
+
+    SDL_Texture *texture = SDL_CreateTextureFromSurface(viewer.renderer, surface);
+    SDL_DestroySurface(surface);
+
+    if (!texture) {
+        fprintf(stderr, "Failed to create texture from text: %s\n", SDL_GetError());
+    }
+
+    return texture;
+}
+
+// Function to select monitor and get its position
+static bool select_monitor(int monitor_index, int *x, int *y) {
+    int num_displays;
+    SDL_DisplayID* display_id = SDL_GetDisplays(&num_displays);
+    if (num_displays <= 0) {
+        fprintf(stderr, "No video displays available: %s\n", SDL_GetError());
+        return false;
+    }
+    SDL_free(display_id);
+
+    if (monitor_index < 0 || monitor_index >= num_displays) {
+        fprintf(stderr, "Invalid monitor index: %d\n", monitor_index);
+        return false;
+    }
+
+    SDL_Rect bounds;
+    if (SDL_GetDisplayBounds(monitor_index, &bounds) != 0) {
+        fprintf(stderr, "Failed to get display bounds for monitor %d: %s\n", monitor_index, SDL_GetError());
+        return false;
+    }
+
+    *x = bounds.x;
+    *y = bounds.y;
+    return true;
+}
+
+static void create_texture(SDL_Renderer *renderer, ImageView *view, SDL_Surface *surface) {
+    view->texture = SDL_CreateTextureFromSurface(renderer, surface);
     if (!view->texture) {
         fprintf(stderr, "Failed to create texture: %s\n", SDL_GetError());
     }
-
-    // Analyze the left edge of the first image
-    analyze_image_left_edge(cropped_surface, &view->left_edge_color);
-    // Analyze the right edge of the last image
-    analyze_image_right_edge(cropped_surface, &view->right_edge_color);
-
-    view->crop_rect = (SDL_FRect){
-        .x = 0,
-        .y = 0,
-        .w = right - left + 1,
-        .h = bottom - top + 1
-    };
+    // Free the surface after creating the texture
+    SDL_DestroySurface(surface);
 }
 
 // Helper function for progress callback
@@ -1490,23 +1509,23 @@ static void update_progress(float progress, const char *message) {
     progress_bar_update(progress, message);
 }
 
-void view_changed(ImageView *old_view_node, ImageView *new_view_node) {
+static void view_changed(ImageView *old_view_node, ImageView *new_view_node) {
     // Update the page change timer
     viewer.last_page_change_time = SDL_GetTicks();
     viewer.show_progress_indicator = true;
-    
-    // Unload old view images
-    if (old_view_node) {
-        for (int i = 0; i < old_view_node->count; i++) {
-            int img_idx = old_view_node->image_indices[i];
-            unload_image(img_idx);
-        }
-        old_view_node->texture = NULL;
+    if (!new_view_node->texture && viewer.load_thread == NULL) {
+        init_view(new_view_node);
     }
 
-    // Load new view images
-    if (new_view_node) {
-        create_texture(viewer.renderer, new_view_node);
+    if (!old_view_node || old_view_node != new_view_node->next) {
+        // if we didn't go back to the previous view, preload the next one
+        if (new_view_node->next) {
+            init_view(new_view_node->next);
+        }
+        // Unload old view images
+        if (old_view_node) {
+            unload_view(old_view_node);
+        }
     }
 }
 
@@ -1514,6 +1533,9 @@ void previous_view() {
     if (!viewer.current_view_node || !viewer.current_view_node->prev) {
         return;
     }
+    if (viewer.load_thread && SDL_GetThreadState(viewer.load_thread) == SDL_THREAD_ALIVE) {
+        return;
+    }    
 
     ImageView *old_view_node = viewer.current_view_node;
     viewer.current_view_node = viewer.current_view_node->prev;
@@ -1521,11 +1543,13 @@ void previous_view() {
     view_changed(old_view_node, viewer.current_view_node);
 }
 
-
 void next_view() {
     if (!viewer.current_view_node || !viewer.current_view_node->next) {
         return;
     }
+    if (viewer.load_thread && SDL_GetThreadState(viewer.load_thread) == SDL_THREAD_ALIVE) {
+        return;
+    }    
 
     ImageView *old_view_node = viewer.current_view_node;
     viewer.current_view_node = viewer.current_view_node->next;
@@ -1542,7 +1566,7 @@ static void generate_default_views() {
     
     ImageView *prev_view = NULL;
     while (i < viewer.image_count) {
-        ImageView *view = create_view_node(prev_view);
+        ImageView *view = create_view_node_after(prev_view);
         if (!view) {
             fprintf(stderr, "Failed to create view node\n");
             return;
@@ -1567,7 +1591,7 @@ static void generate_default_views() {
 // Internal helper functions
 
 // Linked list helper functions
-static ImageView* create_view_node(ImageView* prev_view) {
+static ImageView* create_view_node_after(ImageView* prev_view) {
     ImageView *view = malloc(sizeof(ImageView));
     if (!view) {
         fprintf(stderr, "Failed to allocate memory for view node\n");

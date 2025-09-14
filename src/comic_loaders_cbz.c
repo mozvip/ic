@@ -74,6 +74,12 @@ ArchiveHandle* cbz_open(const char *path, int *total_images, ProgressCallback pr
     handle->total_images = 0;
     handle->entry_names = NULL;
     handle->page_indices = NULL;
+    // Initialize archive mutex for thread-safe access
+    handle->archive_mutex = SDL_CreateMutex();
+    if (!handle->archive_mutex) {
+        fprintf(stderr, "Warning: failed to create archive mutex: %s\n", SDL_GetError());
+        // continue without mutex, but risk races
+    }
     
     // First pass - count image files and collect names
     char **image_entries = (char**)malloc(num_entries * sizeof(char*));
@@ -117,7 +123,7 @@ ArchiveHandle* cbz_open(const char *path, int *total_images, ProgressCallback pr
     *total_images = count;
     
     if (progress_cb) {
-        progress_cb(1.0f, "Archive ready for on-demand loading");
+        progress_cb(1.0f, "Archive ready.");
     }
     
     return handle;
@@ -155,11 +161,12 @@ bool cbz_get_image(ArchiveHandle *handle, int index, char **out_path) {
     }
     free(dir_part);
     
-    // Open the file in the archive
+    // Open the file in the archive (thread-safe)
+    if (handle->archive_mutex) SDL_LockMutex(handle->archive_mutex);
     struct zip_file *zip_file = zip_fopen(zip_archive, entry_name, 0);
     if (!zip_file) {
         fprintf(stderr, "Failed to open file in ZIP archive: %s\n", entry_name);
-        
+        if (handle->archive_mutex) SDL_UnlockMutex(handle->archive_mutex);
         return false;
     }
     
@@ -187,10 +194,11 @@ bool cbz_get_image(ArchiveHandle *handle, int index, char **out_path) {
     // Check for read errors
     if (bytes_read < 0) {
         fprintf(stderr, "Error reading from ZIP archive\n");
-        
+        if (handle->archive_mutex) SDL_UnlockMutex(handle->archive_mutex);
         return false;
     }
     
+    if (handle->archive_mutex) SDL_UnlockMutex(handle->archive_mutex);
     *out_path = strdup(output_path);
     
     return true;
@@ -205,6 +213,12 @@ void cbz_close(ArchiveHandle *handle) {
     if (handle->archive_ptr) {
         struct zip *zip_file = (struct zip*)handle->archive_ptr;
         zip_close(zip_file);
+    }
+
+    // Destroy archive mutex
+    if (handle->archive_mutex) {
+        SDL_DestroyMutex(handle->archive_mutex);
+        handle->archive_mutex = NULL;
     }
     
     // Free entry names

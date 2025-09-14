@@ -9,6 +9,7 @@
 #include <SDL3/SDL.h>
 #include <SDL3_ttf/SDL_ttf.h>
 #include <stdbool.h>
+#include <FreeImage.h>
 
 // Maximum number of images we can handle
 #define MAX_IMAGES 1000
@@ -17,6 +18,7 @@
 typedef struct {
     char *path;               // Path to the image
     SDL_Surface *surface;     // Loaded surface
+    FIBITMAP *bitmap;         // FreeImage bitmap (if used)
     SDL_FRect crop_rect;       // Crop rectangle for the image
 } ImageEntry;
 
@@ -47,6 +49,7 @@ typedef struct ArchiveHandle {
     void *archive_ptr;          // Pointer to the archive-specific handle
     char **entry_names;         // Array of entry names (for CBZ/CBR)
     int *page_indices;          // Array of page indices (for PDF)
+    SDL_Mutex *archive_mutex;   // Mutex to synchronize archive access across threads
 } ArchiveHandle;
 
 #define MAX_IMAGES_PER_VIEW 4
@@ -81,6 +84,7 @@ struct ViewerState {
     TTF_Font *font;           // Font for rendering text
     int monitor_index;        // Selected monitor index
     ArchiveHandle *archive;   // Handle for on-demand loading
+    SDL_Thread *load_thread;                   // Thread for loading images
 
     // Progress indicator display timer
     Uint64 last_page_change_time;  // Time when the last page change occurred
@@ -100,6 +104,8 @@ struct ViewerState {
     int zoom_center_x;             // X-coordinate center of zoom (in window coordinates)
     int zoom_center_y;             // Y-coordinate center of zoom (in window coordinates)
     float max_zoom;                // Maximum zoom level (e.g., 3.0 = 300%)
+    
+    Uint32 preload_event_type;     // SDL user event type for preload completion
 };
 
 // Declare viewer as an extern variable of this struct type
