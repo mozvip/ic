@@ -38,9 +38,6 @@ static bool prepare_image(int index);
 static void unload_image(int index);
 static void toggle_fullscreen(void);
 static void view_changed(ImageView *old_view_node, ImageView *new_view_node);
-static SDL_Color get_dominant_color(SDL_Surface *surface, int x, int y, int width, int height);
-static void analyze_image_left_edge(SDL_Surface *surface, SDL_FRect *crop_rect, SDL_Color *left_color);
-static void analyze_image_right_edge(SDL_Surface *surface, SDL_FRect *crop_rect, SDL_Color *right_color);
 static SDL_Texture* render_text(const char *text, SDL_Color color);
 static bool select_monitor(int monitor_index, int *x, int *y);
 // Preload thread function and starter
@@ -49,9 +46,8 @@ static void init_view(ImageView *view);
 // Structure sent from worker thread to main thread when preload surfaces are ready
 typedef struct PreloadResult {
     ImageView *view;
-    SDL_Surface *surface;
 } PreloadResult;
-static void create_texture(SDL_Renderer *renderer, ImageView *view, SDL_Surface *surface);
+static void create_texture(SDL_Renderer *renderer, ImageView *view);
 static void update_progress(float progress, const char *message);
 static void generate_default_views(void);
 static void previous_view(void);
@@ -424,6 +420,27 @@ bool comic_viewer_load(const char *path) {
     if (result) {
         // generate default views
         generate_default_views();
+        // Update window title to reflect loaded source filename (not full path)
+        if (viewer.window && viewer.source_path) {
+            const char *src = viewer.source_path;
+            int len = (int)strlen(src);
+            int end = len - 1;
+            // Trim trailing slashes/backslashes
+            while (end >= 0 && (src[end] == '/' || src[end] == '\\')) end--;
+
+            const char *filename = src;
+            if (end >= 0) {
+                const char *last_sep = NULL;
+                for (int i = 0; i <= end; ++i) {
+                    if (src[i] == '/' || src[i] == '\\') last_sep = &src[i];
+                }
+                if (last_sep) filename = last_sep + 1;
+            }
+
+            char title[1024];
+            snprintf(title, sizeof(title), "IC - %s", filename);
+            SDL_SetWindowTitle(viewer.window, title);
+        }
     } else {
         update_progress(1.0f, "Could not load input");
         // If we couldn't load the archive, check if it's a directory
@@ -543,16 +560,14 @@ static void handle_events(void) {
                     // Handle surface loading completion events
                     if (event.type == viewer.preload_event_type) {
                         PreloadResult *res = (PreloadResult *)event.user.data1;
-                        if (res && res->view && res->surface) {
+                        if (res && res->view) {
                             ImageView *view = res->view;
                             if (viewer.load_thread) {
                                 SDL_WaitThread(viewer.load_thread, NULL);
                                 viewer.load_thread = NULL; // Clear the thread handle
                             }
                             // Create texture from the loaded surface
-                            create_texture(viewer.renderer, view, res->surface);
-                            // Free the surface now that texture is created
-                            SDL_DestroySurface(res->surface);
+                            create_texture(viewer.renderer, view);
                         }
                         free(res);
                     }
@@ -727,6 +742,11 @@ static void handle_events(void) {
 
                     case SDLK_C:
                         {
+                            // If Ctrl+Shift+C -> copy current view instead of adjusting contrast
+                            if ((event.key.mod & SDL_KMOD_CTRL) && (event.key.mod & SDL_KMOD_SHIFT)) {
+                                copy_current_view_to_clipboard();
+                                break;
+                            }
                             options->enhancement_enabled = true;
                             if (event.key.mod & SDL_KMOD_SHIFT) {
                                 options->contrast -= 5;
@@ -1244,12 +1264,13 @@ static int load_view_surfaces_in_thread(void *data) {
     analyze_image_left_edge(surface, &view->crop_rect, &view->left_edge_color);
     analyze_image_right_edge(surface, &view->crop_rect, &view->right_edge_color);
 
+    view->surface = surface; // transfer ownership to main thread
+
     // Post to main thread to convert surface -> texture
     if (surface) {
         PreloadResult *res = malloc(sizeof(PreloadResult));
         if (res) {
             res->view = view;
-            res->surface = surface; // transfer ownership to main thread
 
             SDL_Event event;
             SDL_zero(event);
@@ -1319,136 +1340,6 @@ static void toggle_fullscreen(void) {
     }
 }
 
-// Function to get the most prominent color from a surface region
-static SDL_Color get_dominant_color(SDL_Surface *surface, int x, int y, int width, int height) {
-    // Default color (black)
-    SDL_Color dominant = {0, 0, 0, 255};
-    
-    // Use a different approach to avoid the large array allocation
-    // We'll use color buckets with fewer bits per channel
-    #define COLOR_BITS 5
-    #define COLOR_BUCKETS (1 << COLOR_BITS)
-    #define COLOR_MASK ((1 << COLOR_BITS) - 1)
-    
-    // Allocate the frequency counter on the heap instead of stack
-    unsigned int *color_freq = calloc(COLOR_BUCKETS * COLOR_BUCKETS * COLOR_BUCKETS, sizeof(unsigned int));
-    if (!color_freq) return dominant;
-    
-    unsigned int max_freq = 0;
-    int dominant_index = 0;
-    
-    // Get pixel format
-    const SDL_PixelFormatDetails *fmt = SDL_GetPixelFormatDetails(surface->format);
-    int bpp = fmt->bytes_per_pixel;
-    
-    // Scan the specified region with bounds checking
-    int sample_step = 2; // Sample every 2nd pixel to speed up analysis
-    
-    uint8_t *pixels = (uint8_t *)surface->pixels;
-    int pitch = surface->pitch;
-    
-    for (int j = y; j < y + height; j += sample_step) {
-        for (int i = x; i < x + width; i += sample_step) {
-            // Skip if outside bounds
-            if (i < 0 || i >= surface->w || j < 0 || j >= surface->h) continue;
-            
-            // Extract the pixel
-            uint8_t *p = pixels + j * pitch + i * bpp;
-            uint32_t pixel = 0;
-            
-            // Be very careful with pixel access
-            switch (bpp) {
-                case 1: pixel = *p; break;
-                case 2: pixel = *(uint16_t *)p; break;
-                case 3: 
-                    #if SDL_BYTEORDER == SDL_BIG_ENDIAN
-                        pixel = p[0] << 16 | p[1] << 8 | p[2]; 
-                    #else
-                        pixel = p[0] | p[1] << 8 | p[2] << 16; 
-                    #endif
-                    break;
-                case 4: pixel = *(uint32_t *)p; break;
-                default: continue; // Skip unknown formats
-            }
-            
-            // Convert to RGB
-            uint8_t r, g, b, a;
-            SDL_GetRGBA(pixel, fmt, SDL_GetSurfacePalette(surface), &r, &g, &b, &a);
-            
-            // Skip almost black or almost white pixels
-            if ((r < 15 && g < 15 && b < 15) || (r > 240 && g > 240 && b > 240)) {
-                continue;
-            }
-            
-            // Reduce color depth to fit in our buckets
-            r >>= (8 - COLOR_BITS);
-            g >>= (8 - COLOR_BITS);
-            b >>= (8 - COLOR_BITS);
-            
-            // Calculate bucket index
-            int bucket_index = (r * COLOR_BUCKETS * COLOR_BUCKETS) + (g * COLOR_BUCKETS) + b;
-            
-            // Increment frequency
-            color_freq[bucket_index]++;
-            if (color_freq[bucket_index] > max_freq) {
-                max_freq = color_freq[bucket_index];
-                dominant_index = bucket_index;
-            }
-        }
-    }
-    
-    // Convert bucket index back to RGB
-    if (max_freq > 0) {
-        int r = (dominant_index / (COLOR_BUCKETS * COLOR_BUCKETS)) & COLOR_MASK;
-        int g = (dominant_index / COLOR_BUCKETS) & COLOR_MASK;
-        int b = dominant_index & COLOR_MASK;
-        
-        // Convert back to 8-bit channels
-        dominant.r = (r << (8 - COLOR_BITS)) | (r >> (2 * COLOR_BITS - 8));
-        dominant.g = (g << (8 - COLOR_BITS)) | (g >> (2 * COLOR_BITS - 8));
-        dominant.b = (b << (8 - COLOR_BITS)) | (b >> (2 * COLOR_BITS - 8));
-    }
-    
-    free(color_freq);
-    return dominant;
-}
-
-// This function analyzes the image and extracts the dominant color from the left edge
-static void analyze_image_left_edge(SDL_Surface *surface, SDL_FRect *crop_rect, SDL_Color *left_color) {
-    // Default to black if something goes wrong
-    *left_color = (SDL_Color){0, 0, 0, 255};
-    
-    // Get image dimensions
-    int width = crop_rect->w;
-    int height = crop_rect->h;
-
-    // Sample pixels from the left edge (8% of width)
-    int edge_width = width * 0.08;
-    if (edge_width < 1) edge_width = 1;
-    if (edge_width > width) edge_width = width; // Cap at image width
-
-    // Get dominant color from left edge
-    *left_color = get_dominant_color(surface, crop_rect->x, crop_rect->y, edge_width, height);
-}
-
-// This function analyzes the image and extracts the dominant color from the right edge
-static void analyze_image_right_edge(SDL_Surface *surface, SDL_FRect *crop_rect, SDL_Color *right_color) {
-    // Default to black if something goes wrong
-    *right_color = (SDL_Color){0, 0, 0, 255};
-
-    // Get image dimensions
-    int width = crop_rect->w;
-    int height = crop_rect->h;
-
-    // Sample pixels from the right edge (8% of width)
-    int edge_width = width * 0.08;
-    if (edge_width < 1) edge_width = 1;
-    if (edge_width > width) edge_width = width; // Cap at image width
-    
-    // Get dominant color from right edge
-    *right_color = get_dominant_color(surface, crop_rect->x + crop_rect->w - edge_width, crop_rect->y, edge_width, height);
-}
-
 // Function to render text as a texture
 static SDL_Texture* render_text(const char *text, SDL_Color color) {
     if (!viewer.font || !text) return NULL;
@@ -1495,13 +1386,11 @@ static bool select_monitor(int monitor_index, int *x, int *y) {
     return true;
 }
 
-static void create_texture(SDL_Renderer *renderer, ImageView *view, SDL_Surface *surface) {
-    view->texture = SDL_CreateTextureFromSurface(renderer, surface);
+static void create_texture(SDL_Renderer *renderer, ImageView *view) {
+    view->texture = SDL_CreateTextureFromSurface(renderer, view->surface);
     if (!view->texture) {
         fprintf(stderr, "Failed to create texture: %s\n", SDL_GetError());
     }
-    // Free the surface after creating the texture
-    SDL_DestroySurface(surface);
 }
 
 // Helper function for progress callback

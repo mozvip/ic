@@ -10,6 +10,8 @@
 #include <SDL3_ttf/SDL_ttf.h>
 #include <stdbool.h>
 #include <FreeImage.h>
+#include "edges.h"
+#include "clipboard.h"
 
 // Maximum number of images we can handle
 #define MAX_IMAGES 1000
@@ -60,6 +62,7 @@ typedef struct ImageView {
     int total_width;                            // Total width of the view
     int max_height;                             // Max height of the view
     SDL_FRect crop_rect;                        // Crop rectangle for the view
+    SDL_Surface *surface;                       // Combined surface for the view
     SDL_Texture *texture;                       // Loaded texture
     struct ImageView *next;                     // Pointer to next view in linked list
     struct ImageView *prev;                     // Pointer to previous view in linked list
