@@ -127,4 +127,9 @@ void comic_viewer_run(void);
 // Clean up resources
 void comic_viewer_cleanup(void);
 
+// Provide limited public helpers needed by file browser
+SDL_Texture* viewer_render_text(const char *text, SDL_Color color);
+void viewer_init_view(ImageView *view);
+bool viewer_has_current_view(void);
+
 #endif // COMIC_VIEWER_H

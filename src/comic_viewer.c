@@ -53,7 +53,11 @@ static void generate_default_views(void);
 static void previous_view(void);
 static void next_view(void);
 void free_view_texture(ImageView *view) ;
+// File browser (separate module)
+#include "file_browser.h"
 
+
+// ---------------- Remaining Viewer Implementation ----------------
 // Linked list helper functions
 static ImageView* create_view_node_after(ImageView *prev_view);
 static void append_view(ImageView *view);
@@ -132,95 +136,6 @@ static void remove_current_view(void) {
         viewer.last_page_change_time = SDL_GetTicks();
     }
 }
-
-// Helper function to convert RGB to HSL
-// r, g, b, s, l are in [0, 1], h is in [0, 360)
-static void rgb_to_hsl(float r, float g, float b, float *h, float *s, float *l) {
-    float max_val = fmaxf(fmaxf(r, g), b);
-    float min_val = fminf(fminf(r, g), b);
-    *l = (max_val + min_val) / 2.0f;
-
-    if (max_val == min_val) {
-        *h = 0; // achromatic
-        *s = 0;
-    } else {
-        float d = max_val - min_val;
-        *s = (*l > 0.5f) ? d / (2.0f - max_val - min_val) : d / (max_val + min_val);
-        if (max_val == r) {
-            *h = (g - b) / d + (g < b ? 6.0f : 0);
-        } else if (max_val == g) {
-            *h = (b - r) / d + 2.0f;
-        } else { // max_val == b
-            *h = (r - g) / d + 4.0f;
-        }
-        *h /= 6.0f;
-        *h *= 360.0f;
-    }
-}
-
-// Helper for hsl_to_rgb
-static float hue_to_rgb_component(float p, float q, float t) {
-    if (t < 0) t += 1.0f;
-    if (t > 1) t -= 1.0f;
-    if (t < 1.0f/6.0f) return p + (q - p) * 6.0f * t;
-    if (t < 1.0f/2.0f) return q;
-    if (t < 2.0f/3.0f) return p + (q - p) * (2.0f/3.0f - t) * 6.0f;
-    return p;
-}
-
-// Helper function to convert HSL to RGB
-// r, g, b, s, l are in [0, 1], h is in [0, 360)
-static void hsl_to_rgb(float h, float s, float l, float *r, float *g, float *b) {
-    if (s == 0) {
-        *r = *g = *b = l; // achromatic
-    } else {
-        float q = (l < 0.5f) ? l * (1.0f + s) : l + s - l * s;
-        float p = 2.0f * l - q;
-        float h_norm = h / 360.0f;
-        *r = hue_to_rgb_component(p, q, h_norm + 1.0f/3.0f);
-        *g = hue_to_rgb_component(p, q, h_norm);
-        *b = hue_to_rgb_component(p, q, h_norm - 1.0f/3.0f);
-    }
-}
-
-// Function to render a horizontal gradient using HSL interpolation
-static void render_horizontal_gradient_hsl(SDL_Renderer *renderer, SDL_Rect rect, SDL_Color edge_color_rgb, bool edge_color_is_on_left_of_fill) {
-    if (rect.w <= 0) return; // Do not render if width is zero or negative
-
-    float r_edge = edge_color_rgb.r / 255.0f;
-    float g_edge = edge_color_rgb.g / 255.0f;
-    float b_edge = edge_color_rgb.b / 255.0f;
-
-    float h_edge, s_edge, l_edge;
-    rgb_to_hsl(r_edge, g_edge, b_edge, &h_edge, &s_edge, &l_edge);
-
-    for (int col = 0; col < (int)rect.w; ++col) {
-        float t; // Interpolation factor: 0 for edge_color, 1 for black
-        if (edge_color_is_on_left_of_fill) { // Gradient from left (edge_color) to right (black)
-            t = (float)col / (float)(rect.w > 1 ? rect.w -1 : 1); // Avoid division by zero if rect.w is 1
-        } else { // Gradient from right (edge_color) to left (black)
-            t = 1.0f - ((float)col / (float)(rect.w > 1 ? rect.w -1 : 1));
-        }
-        // Clamp t to [0, 1] just in case
-        t = fmaxf(0.0f, fminf(1.0f, t));
-
-
-        // Interpolate S and L towards 0 (black), keep H constant
-        float s_interp = s_edge * (1.0f - t);
-        float l_interp = l_edge * (1.0f - t);
-
-        float r_interp, g_interp, b_interp;
-        hsl_to_rgb(h_edge, s_interp, l_interp, &r_interp, &g_interp, &b_interp);
-
-        SDL_SetRenderDrawColor(renderer,
-                               (Uint8)(r_interp * 255.0f),
-                               (Uint8)(g_interp * 255.0f),
-                               (Uint8)(b_interp * 255.0f),
-                               255);
-        SDL_RenderLine(renderer, rect.x + col, rect.y, rect.x + col, rect.y + rect.h -1.0f);
-    }
-}
-
 
 bool comic_viewer_init(int monitor_index) {
     // Set the video driver hint to Wayland before initializing SDL
@@ -603,7 +518,37 @@ static void handle_events(void) {
                 break;
                 
             case SDL_EVENT_KEY_DOWN:
+                // If file browser active, delegate keys first (except we allow ESC handled inside)
+                if (file_browser_is_active()) {
+                    file_browser_handle_key(event.key.key);
+                    if (file_browser_is_active() || event.key.key == SDLK_RETURN || event.key.key == SDLK_KP_ENTER) {
+                        break;
+                    }
+                }
                 switch (event.key.key) {
+                    case SDLK_RETURN:
+                    case SDLK_KP_ENTER:
+                        // Toggle file browser
+                        if (!file_browser_is_active()) {
+                            // Open at current comic directory or cwd if none
+                            if (viewer.source_path) {
+                                char dir_path[4096];
+                                strncpy(dir_path, viewer.source_path, sizeof(dir_path)-1); dir_path[sizeof(dir_path)-1]='\0';
+                                // strip filename if source_path is a file (has extension)
+                                const char *dot = strrchr(dir_path, '.');
+                                const char *slash = strrchr(dir_path, '/');
+                                if (dot && slash && dot > slash) {
+                                    // it's a file path; truncate after slash
+                                    dir_path[slash - dir_path] = '\0';
+                                }
+                                file_browser_open(dir_path);
+                            } else {
+                                file_browser_open(NULL);
+                            }
+                        } else {
+                            // Already handled above (should not get here while active)
+                        }
+                        break;
                     case SDLK_ESCAPE:
                         viewer.running = false;
                         break;
@@ -907,6 +852,9 @@ static void render_current_view(void) {
     }
     
     display_info();
+
+    // Render file browser overlay if active (after main content so it appears on top)
+    file_browser_render();
 
     // Update screen
     SDL_RenderPresent(viewer.renderer);
@@ -1359,6 +1307,11 @@ static SDL_Texture* render_text(const char *text, SDL_Color color) {
 
     return texture;
 }
+
+// Public wrappers for file browser
+SDL_Texture* viewer_render_text(const char *text, SDL_Color color) { return render_text(text, color); }
+void viewer_init_view(ImageView *view) { init_view(view); }
+bool viewer_has_current_view(void) { return viewer.current_view_node != NULL; }
 
 // Function to select monitor and get its position
 static bool select_monitor(int monitor_index, int *x, int *y) {

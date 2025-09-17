@@ -1,5 +1,94 @@
 #include "edges.h"
 #include <stdlib.h>
+#include <math.h>
+
+// Helper function to convert RGB to HSL
+// r, g, b, s, l are in [0, 1], h is in [0, 360)
+static void rgb_to_hsl(float r, float g, float b, float *h, float *s, float *l) {
+    float max_val = fmaxf(fmaxf(r, g), b);
+    float min_val = fminf(fminf(r, g), b);
+    *l = (max_val + min_val) / 2.0f;
+
+    if (max_val == min_val) {
+        *h = 0; // achromatic
+        *s = 0;
+    } else {
+        float d = max_val - min_val;
+        *s = (*l > 0.5f) ? d / (2.0f - max_val - min_val) : d / (max_val + min_val);
+        if (max_val == r) {
+            *h = (g - b) / d + (g < b ? 6.0f : 0);
+        } else if (max_val == g) {
+            *h = (b - r) / d + 2.0f;
+        } else { // max_val == b
+            *h = (r - g) / d + 4.0f;
+        }
+        *h /= 6.0f;
+        *h *= 360.0f;
+    }
+}
+
+// Helper for hsl_to_rgb
+static float hue_to_rgb_component(float p, float q, float t) {
+    if (t < 0) t += 1.0f;
+    if (t > 1) t -= 1.0f;
+    if (t < 1.0f/6.0f) return p + (q - p) * 6.0f * t;
+    if (t < 1.0f/2.0f) return q;
+    if (t < 2.0f/3.0f) return p + (q - p) * (2.0f/3.0f - t) * 6.0f;
+    return p;
+}
+
+// Helper function to convert HSL to RGB
+// r, g, b, s, l are in [0, 1], h is in [0, 360)
+static void hsl_to_rgb(float h, float s, float l, float *r, float *g, float *b) {
+    if (s == 0) {
+        *r = *g = *b = l; // achromatic
+    } else {
+        float q = (l < 0.5f) ? l * (1.0f + s) : l + s - l * s;
+        float p = 2.0f * l - q;
+        float h_norm = h / 360.0f;
+        *r = hue_to_rgb_component(p, q, h_norm + 1.0f/3.0f);
+        *g = hue_to_rgb_component(p, q, h_norm);
+        *b = hue_to_rgb_component(p, q, h_norm - 1.0f/3.0f);
+    }
+}
+
+// Function to render a horizontal gradient using HSL interpolation
+void render_horizontal_gradient_hsl(SDL_Renderer *renderer, SDL_Rect rect, SDL_Color edge_color_rgb, bool edge_color_is_on_left_of_fill) {
+    if (rect.w <= 0) return; // Do not render if width is zero or negative
+
+    float r_edge = edge_color_rgb.r / 255.0f;
+    float g_edge = edge_color_rgb.g / 255.0f;
+    float b_edge = edge_color_rgb.b / 255.0f;
+
+    float h_edge, s_edge, l_edge;
+    rgb_to_hsl(r_edge, g_edge, b_edge, &h_edge, &s_edge, &l_edge);
+
+    for (int col = 0; col < (int)rect.w; ++col) {
+        float t; // Interpolation factor: 0 for edge_color, 1 for black
+        if (edge_color_is_on_left_of_fill) { // Gradient from left (edge_color) to right (black)
+            t = (float)col / (float)(rect.w > 1 ? rect.w -1 : 1); // Avoid division by zero if rect.w is 1
+        } else { // Gradient from right (edge_color) to left (black)
+            t = 1.0f - ((float)col / (float)(rect.w > 1 ? rect.w -1 : 1));
+        }
+        // Clamp t to [0, 1] just in case
+        t = fmaxf(0.0f, fminf(1.0f, t));
+
+
+        // Interpolate S and L towards 0 (black), keep H constant
+        float s_interp = s_edge * (1.0f - t);
+        float l_interp = l_edge * (1.0f - t);
+
+        float r_interp, g_interp, b_interp;
+        hsl_to_rgb(h_edge, s_interp, l_interp, &r_interp, &g_interp, &b_interp);
+
+        SDL_SetRenderDrawColor(renderer,
+                               (Uint8)(r_interp * 255.0f),
+                               (Uint8)(g_interp * 255.0f),
+                               (Uint8)(b_interp * 255.0f),
+                               255);
+        SDL_RenderLine(renderer, rect.x + col, rect.y, rect.x + col, rect.y + rect.h -1.0f);
+    }
+}
 
 // Function to get the most prominent color from a surface region
 static SDL_Color get_dominant_color(SDL_Surface *surface, int x, int y, int width, int height) {
