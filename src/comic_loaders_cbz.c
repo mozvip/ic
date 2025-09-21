@@ -3,14 +3,23 @@
  * Implementation of CBZ/ZIP comic loading
  */
 
+#include "comic_loaders.h"
+#include "image_loader.h"
+#include "progress_bar.h"
+#include "process_utils.h"
+#include <SDL3/SDL.h>
+#include <zip.h>
+#include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
+#include <dirent.h>
 #include <sys/stat.h>
-#include <sys/types.h>
 #include <unistd.h>
-#include <zip.h>
-#include "comic_loaders.h"
+#include <pthread.h>
+
+// External functions from comic_loaders_utils.c
+extern int image_name_compare(const void *a, const void *b);
+extern const char* get_filename_from_path(const char* path);
 
 // External functions from comic_loaders_utils.c
 extern int image_name_compare(const void *a, const void *b);
@@ -155,9 +164,8 @@ bool cbz_get_image(ArchiveHandle *handle, int index, char **out_path) {
     char *last_slash = strrchr(dir_part, '/');
     if (last_slash) {
         *last_slash = '\0';
-        char command[1024];
-        snprintf(command, sizeof(command), "mkdir -p \"%s\"", dir_part);
-        system(command);
+        const char *args[] = {"mkdir", "-p", dir_part, NULL};
+        execute_command(args);
     }
     free(dir_part);
     
@@ -232,9 +240,8 @@ void cbz_close(ArchiveHandle *handle) {
     // Clean up temporary directory (if needed)
     if (handle->temp_dir) {
         // Optionally remove temp files
-        // char cmd[512];
-        // snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", handle->temp_dir);
-        // system(cmd);
+        // const char *args[] = {"rm", "-rf", handle->temp_dir, NULL};
+        // execute_command(args);
         free(handle->temp_dir);
     }
     

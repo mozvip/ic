@@ -9,13 +9,13 @@ static const void * get_clipboard_data(void *userdata, const char *mime_type, si
     if (strcmp(mime_type, "image/png") == 0) {
         ImageView *image_view = (ImageView *)userdata;
         if (!image_view) {
-            fprintf(stderr, "No image view available for clipboard data\n");
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "No image view available for clipboard data\n");
             return NULL;
         }
         // Create PNG data from the view's surface
         SDL_Surface *surface = image_view->surface;
         if (!surface) {
-            fprintf(stderr, "No surface available in image view for clipboard data\n");
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "No surface available in image view for clipboard data\n");
             return NULL;
         }
 
@@ -31,18 +31,18 @@ static const void * get_clipboard_data(void *userdata, const char *mime_type, si
                                                         true);     // Top-down
         SDL_UnlockSurface(surface);                                                        
         if (!bitmap) {
-            fprintf(stderr, "Failed to convert SDL surface to FreeImage bitmap\n");
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to convert SDL surface to FreeImage bitmap\n");
             return NULL;
         }
         // Use FreeImage to encode surface to PNG in memory
         FIMEMORY *mem = FreeImage_OpenMemory(0, 0);
         if (!mem) {
-            fprintf(stderr, "Failed to open FreeImage memory stream\n");
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to open FreeImage memory stream\n");
             return NULL;
         }
 
         if (!FreeImage_SaveToMemory(FIF_PNG, bitmap, mem, 0)) {
-            fprintf(stderr, "Failed to save bitmap to PNG in memory\n");
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to save bitmap to PNG in memory\n");
             FreeImage_Unload(bitmap);
             FreeImage_CloseMemory(mem);
             return NULL;
@@ -60,7 +60,7 @@ static const void * get_clipboard_data(void *userdata, const char *mime_type, si
                 *size = png_size;
                 return data_copy; // memory will be freed by cleanup_clipboard_data
             } else {
-                fprintf(stderr, "Failed to allocate memory for clipboard PNG data\n");
+                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to allocate memory for clipboard PNG data\n");
             }
 
         }   

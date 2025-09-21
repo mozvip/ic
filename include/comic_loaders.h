@@ -17,6 +17,8 @@ typedef void (*ProgressCallback)(float progress, const char *message);
 
 // Function to check if a file is a supported image
 bool is_image_file(const char *filename);
+char *dir_name(char *path);
+bool is_directory(char *path);
 
 // Load images from a directory
 bool load_directory(const char *path, ImageEntry *images, int *image_count, int max_images, ProgressCallback progress_cb);

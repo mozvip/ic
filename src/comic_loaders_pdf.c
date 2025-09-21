@@ -12,6 +12,7 @@
 #include <unistd.h>
 #include <dirent.h>
 #include "comic_loaders.h"
+#include "process_utils.h"
 
 // External functions from comic_loaders_utils.c
 extern int image_name_compare(const void *a, const void *b);
@@ -21,55 +22,46 @@ const int PDF_PIXEL_DENSITY = 120; // DPI for PDF rendering
 
 // Get PDF page count using pdfinfo (part of poppler-utils)
 static int get_pdf_page_count(const char *path) {
-    char *escaped_path = escape_shell_arg(path);
-    char cmd[1024];
-    
-    // Use pdfinfo to get page count
-    snprintf(cmd, sizeof(cmd), "pdfinfo %s | grep Pages | awk '{print $2}'", escaped_path);
-    
-    FILE *fp = popen(cmd, "r");
-    if (fp == NULL) {
-        free(escaped_path);
+    const char *pdfinfo_args[] = {"pdfinfo", path, NULL};
+    char *pdfinfo_output = execute_command_with_output(pdfinfo_args);
+    if (pdfinfo_output == NULL) {
         return -1;
     }
-    
-    char line[128];
+
+    char *line = strtok(pdfinfo_output, "\n");
     int n_pages = 0;
-    
-    if (fgets(line, sizeof(line), fp)) {
-        sscanf(line, "%d", &n_pages);
+    while (line != NULL) {
+        if (strncmp(line, "Pages:", 6) == 0) {
+            sscanf(line + 6, "%d", &n_pages);
+            break;
+        }
+        line = strtok(NULL, "\n");
     }
-    
-    pclose(fp);
-    free(escaped_path);
-    
+
+    free(pdfinfo_output);
     return n_pages;
 }
 
 // Extract a single page from PDF using pdfimages
 static char* extract_pdf_page(const char *pdf_path, int page_index, const char *output_prefix, const char *expected_path, bool *success) {
-    char *escaped_pdf_path = escape_shell_arg(pdf_path);
-    char *escaped_output_prefix = escape_shell_arg(output_prefix);
+    char page_str[12];
+    char density_str[12];
+    snprintf(page_str, sizeof(page_str), "%d", page_index + 1);
+    snprintf(density_str, sizeof(density_str), "%d", PDF_PIXEL_DENSITY);
 
-    char cmd[2048];
-
-    // old version
-    // snprintf(cmd, sizeof(cmd),
-    //          "pdfimages -all -f %d -l %d \"%s\" %s",
-    //          page_index + 1, page_index + 1,
-    //          pdf_path, output_prefix);
-    // new version
-    // Create command to render a single page using pdftoppm
-    snprintf(cmd, sizeof(cmd), 
-             "pdftoppm -r %d -f %d -l %d -jpeg \"%s\" %s",
-             PDF_PIXEL_DENSITY, page_index + 1 , page_index + 1,
-             pdf_path, output_prefix);
+    const char *args[] = {
+        "pdftoppm",
+        "-r", density_str,
+        "-f", page_str,
+        "-l", page_str,
+        "-jpeg",
+        pdf_path,
+        output_prefix,
+        NULL
+    };
 
     // Execute the command
-    int result = system(cmd);
-
-    free(escaped_pdf_path);
-    free(escaped_output_prefix);
+    execute_command(args);
    
     // Check if the file exists
     if (access(expected_path, F_OK) != 0) {
@@ -206,9 +198,8 @@ void pdf_close(ArchiveHandle *handle) {
     // Clean up temporary directory (if needed)
     if (handle->temp_dir) {
         // Optionally remove temp files
-        // char cmd[512];
-        // snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", handle->temp_dir);
-        // system(cmd);
+        // const char *args[] = {"rm", "-rf", handle->temp_dir, NULL};
+        // execute_command(args);
         free(handle->temp_dir);
     }
     

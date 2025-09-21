@@ -21,6 +21,7 @@
 #include "progress_bar.h"
 #include "progress_indicator.h" // Moved here
 #include "image_loader.h" // Add FreeImage loader
+#include "upscale.h"
 
 SDL_Color white = {255, 255, 255, 255}; // White
 
@@ -140,7 +141,7 @@ static void remove_current_view(void) {
 bool comic_viewer_init(int monitor_index) {
     // Set the video driver hint to Wayland before initializing SDL
     if (SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "wayland") == 0) {
-        fprintf(stderr, "Warning: Failed to set Wayland video driver hint: %s\n", SDL_GetError());
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Warning: Failed to set Wayland video driver hint: %s", SDL_GetError());
     }
     
     // Enable HiDPI scaling
@@ -151,20 +152,20 @@ bool comic_viewer_init(int monitor_index) {
     
     // Initialize SDL
     if (!SDL_Init(SDL_INIT_VIDEO)) {
-        fprintf(stderr, "SDL could not initialize! SDL_Error: %s\n", SDL_GetError());
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "SDL could not initialize! SDL_Error: %s", SDL_GetError());
         return false;
     }
    
     // Initialize SDL_ttf
     if (!TTF_Init()) {
-        fprintf(stderr, "SDL_ttf could not initialize! SDL_ttf Error: %s\n", SDL_GetError());
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "SDL_ttf could not initialize! SDL_ttf Error: %s", SDL_GetError());
         SDL_Quit();
         return false;
     }
 
     // Initialize FreeImage
     if (!image_loader_init()) {
-        fprintf(stderr, "Failed to initialize FreeImage library\n");
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to initialize FreeImage library");
         TTF_Quit();
         SDL_Quit();
         return false;
@@ -173,7 +174,7 @@ bool comic_viewer_init(int monitor_index) {
     // Determine monitor position
     int x = SDL_WINDOWPOS_UNDEFINED, y = SDL_WINDOWPOS_UNDEFINED;
     if (!select_monitor(monitor_index, &x, &y)) {
-        fprintf(stderr, "Failed to select monitor %d\n", monitor_index);
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to select monitor %d", monitor_index);
         TTF_Quit();
         SDL_Quit();
         return false;
@@ -191,7 +192,7 @@ bool comic_viewer_init(int monitor_index) {
                                     window_flags);
                                     
     if (viewer.window == NULL) {
-        fprintf(stderr, "Window could not be created! SDL_Error: %s\n", SDL_GetError());
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Window could not be created! SDL_Error: %s", SDL_GetError());
         TTF_Quit();
         SDL_Quit();
         return false;
@@ -214,7 +215,7 @@ bool comic_viewer_init(int monitor_index) {
     viewer.renderer = SDL_CreateRenderer(viewer.window, renderer_name);
     
     if (viewer.renderer == NULL) {
-        fprintf(stderr, "Renderer could not be created! SDL_Error: %s\n", SDL_GetError());
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Renderer could not be created! SDL_Error: %s", SDL_GetError());
         SDL_DestroyWindow(viewer.window);
         TTF_Quit();
         SDL_Quit();
@@ -223,7 +224,7 @@ bool comic_viewer_init(int monitor_index) {
     
     // Initialize the progress bar
     if (!progress_bar_init(viewer.renderer)) {
-        fprintf(stderr, "Warning: Failed to initialize progress bar. Loading will proceed without visual feedback.\n");
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Warning: Failed to initialize progress bar. Loading will proceed without visual feedback.");
         // Continue without progress bar - non-fatal
     }
     
@@ -243,7 +244,8 @@ bool comic_viewer_init(int monitor_index) {
     }
 
     // Load font - try to load a system font if available
-    viewer.font = TTF_OpenFont("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 20);
+    // viewer.font = TTF_OpenFont("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 20);
+    viewer.font = TTF_OpenFont("/usr/share/fonts/liberation/LiberationMono-Bold.ttf", 20);
     if (!viewer.font) {
         // Try another common font location
         viewer.font = TTF_OpenFont("/usr/share/fonts/TTF/DejaVuSans.ttf", 20);
@@ -253,7 +255,7 @@ bool comic_viewer_init(int monitor_index) {
         viewer.font = TTF_OpenFont("/usr/share/fonts/dejavu/DejaVuSans.ttf", 20);
     }
     if (!viewer.font) {
-        fprintf(stderr, "Warning: Failed to load font: %s\n", SDL_GetError());
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Warning: Failed to load font: %s", SDL_GetError());
         // Continue without a font - we'll handle the null case when rendering
     }
 
@@ -278,6 +280,8 @@ bool comic_viewer_init(int monitor_index) {
     viewer.zoom_center_x = 0;
     viewer.zoom_center_y = 0;
     viewer.max_zoom = 3.0f;
+    viewer.pan_offset_x = 0;
+    viewer.pan_offset_y = 0;
 
     for (int i = 0; i < MAX_IMAGES; i++) {
         viewer.images[i].path = NULL;
@@ -290,6 +294,46 @@ bool comic_viewer_init(int monitor_index) {
     return true;
 }
 
+bool comic_viewer_load_and_display(const char *path_to_folder, const char *image_file_to_display) {
+    bool res = comic_viewer_load(path_to_folder);
+    if (!res) return false;
+
+    // Then load the specific image file is provided
+    if (image_file_to_display == NULL) return true;
+
+    // Find the index of the specified image file
+    int target_index = -1;
+    for (int i = 0; i < viewer.image_count; i++) {
+        if (viewer.images[i].path && strcmp(viewer.images[i].path, image_file_to_display) == 0) {
+            target_index = i;
+            break;
+        }
+    }
+    if (target_index == -1) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Specified image file not found in loaded images: %s", image_file_to_display);
+        return false;
+    }
+
+    // Find which view contains this image index
+    ImageView *view = viewer.first_view;
+    int view_index = 0;
+    while (view) {
+        for (int i = 0; i < view->count; i++) {
+            if (view->image_indices[i] == target_index) {
+                view_changed(NULL, view);
+                // Found the view containing the target image
+                viewer.current_view_node = view;
+                viewer.current_view_index = view_index;
+                return true;
+            }
+        }
+        view = view->next;
+        view_index++;
+    }
+
+    return true;
+}
+
 bool comic_viewer_load(const char *path) {
     if (path == NULL) return false;
 
@@ -298,12 +342,12 @@ bool comic_viewer_load(const char *path) {
     if (viewer.source_path == NULL) return false;
 
     // Initial progress update
-    update_progress(0.0f, "Detecting file type...");
+    update_progress(0.0f, "Detecting input type...");
 
     // Check if path is a directory
     struct stat path_stat;
     if (stat(path, &path_stat) != 0) {
-        fprintf(stderr, "Cannot access path: %s\n", path);
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Cannot access path: %s", path);
         return false;
     }
 
@@ -385,7 +429,7 @@ void unload_view(ImageView *view) {
 
 void comic_viewer_run(void) {
     if (viewer.image_count == 0) {
-        fprintf(stderr, "No images to display\n");
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "No images to display");
         return;
     }
 
@@ -501,12 +545,33 @@ static void handle_events(void) {
                 }
                 break;
                 
+            case SDL_EVENT_MOUSE_MOTION:
+                if (viewer.zoomed) {
+                    const int pan_margin = 50; // pixels from edge to start panning
+                    const float pan_speed = 10.0f;
+
+                    if (event.motion.x < pan_margin) {
+                        viewer.pan_offset_x += pan_speed;
+                    } else if (event.motion.x > viewer.window_width - pan_margin) {
+                        viewer.pan_offset_x -= pan_speed;
+                    }
+
+                    if (event.motion.y < pan_margin) {
+                        viewer.pan_offset_y += pan_speed;
+                    } else if (event.motion.y > viewer.window_height - pan_margin) {
+                        viewer.pan_offset_y -= pan_speed;
+                    }
+                }
+                break;
+
             case SDL_EVENT_MOUSE_BUTTON_DOWN:
                 if (event.button.button == SDL_BUTTON_LEFT) {
                     // Left mouse button pressed - toggle zoom
                     if (viewer.zoomed) {
                         // If already zoomed, return to normal view
                         viewer.zoomed = false;
+                        viewer.pan_offset_x = 0;
+                        viewer.pan_offset_y = 0;
                     } else {
                         // Zoom in with center at click location
                         viewer.zoomed = true;
@@ -532,16 +597,21 @@ static void handle_events(void) {
                         if (!file_browser_is_active()) {
                             // Open at current comic directory or cwd if none
                             if (viewer.source_path) {
-                                char dir_path[4096];
-                                strncpy(dir_path, viewer.source_path, sizeof(dir_path)-1); dir_path[sizeof(dir_path)-1]='\0';
-                                // strip filename if source_path is a file (has extension)
-                                const char *dot = strrchr(dir_path, '.');
-                                const char *slash = strrchr(dir_path, '/');
-                                if (dot && slash && dot > slash) {
-                                    // it's a file path; truncate after slash
-                                    dir_path[slash - dir_path] = '\0';
+                                // are we already in a directory?
+                                if (viewer.type == SOURCE_DIRECTORY) {
+                                    file_browser_open(viewer.source_path);
+                                } else {
+                                    char dir_path[4096];
+                                    strncpy(dir_path, viewer.source_path, sizeof(dir_path)-1); dir_path[sizeof(dir_path)-1]='\0';
+                                    // strip filename if source_path is a file (has extension)
+                                    const char *dot = strrchr(dir_path, '.');
+                                    const char *slash = strrchr(dir_path, '/');
+                                    if (dot && slash && dot > slash) {
+                                        // it's a file path; truncate after slash
+                                        dir_path[slash - dir_path] = '\0';
+                                    }
+                                    file_browser_open(dir_path);
                                 }
-                                file_browser_open(dir_path);
                             } else {
                                 file_browser_open(NULL);
                             }
@@ -803,14 +873,15 @@ static void render_current_view(void) {
     // Now do the actual rendering
     if (current_display_view->texture) {
         // Apply zoom scaling for rendering
+        float final_scale = scale;
         if (viewer.zoomed) {
-            scale = scale * scale_multiplier;
+            final_scale = scale * scale_multiplier;
         }
         
-        if (scale <= 1e-6f) scale = 1e-6f; // Prevent zero or negative scale
+        if (final_scale <= 1e-6f) final_scale = 1e-6f; // Prevent zero or negative scale
 
-        int scaled_width = (int)(current_display_view->texture->w * scale);
-        int scaled_height = (int)(current_display_view->texture->h * scale);
+        int scaled_width = (int)(current_display_view->texture->w * final_scale);
+        int scaled_height = (int)(current_display_view->texture->h * final_scale);
         if (scaled_width <= 0) scaled_width = 1; // Ensure positive dimensions
         if (scaled_height <= 0) scaled_height = 1;
 
@@ -818,9 +889,43 @@ static void render_current_view(void) {
         float x_pos_render, y_pos_render;
         
         if (viewer.zoomed) {
-            // In zoom mode, center around the zoom center point
-            x_pos_render = viewer.zoom_center_x - (scaled_width / 2.0f);
-            y_pos_render = viewer.zoom_center_y - (scaled_height / 2.0f);
+            // Calculate the un-zoomed position first
+            float unzoomed_width = current_display_view->texture->w * scale;
+            float unzoomed_height = current_display_view->texture->h * scale;
+            float unzoomed_x = (display_area_width - unzoomed_width) / 2.0f;
+            float unzoomed_y = (display_area_height - unzoomed_height) / 2.0f;
+
+            // Calculate the cursor position relative to the un-zoomed image
+            float cursor_relative_x = viewer.zoom_center_x - unzoomed_x;
+            float cursor_relative_y = viewer.zoom_center_y - unzoomed_y;
+
+            // Calculate the corresponding point in the zoomed image
+            float zoomed_point_x = cursor_relative_x * scale_multiplier;
+            float zoomed_point_y = cursor_relative_y * scale_multiplier;
+
+            // The new top-left corner is the cursor position minus the zoomed point
+            x_pos_render = viewer.zoom_center_x - zoomed_point_x;
+            y_pos_render = viewer.zoom_center_y - zoomed_point_y;
+
+            // Constrain vertical panning
+            if (scaled_height > display_area_height) {
+                float max_pan_y = -y_pos_render;
+                float min_pan_y = display_area_height - scaled_height - y_pos_render;
+                if (viewer.pan_offset_y > max_pan_y) {
+                    viewer.pan_offset_y = max_pan_y;
+                }
+                if (viewer.pan_offset_y < min_pan_y) {
+                    viewer.pan_offset_y = min_pan_y;
+                }
+            } else {
+                // If image is smaller than screen, no vertical panning needed
+                viewer.pan_offset_y = 0;
+            }
+
+            // Apply panning
+            x_pos_render += viewer.pan_offset_x;
+            y_pos_render += viewer.pan_offset_y;
+
         } else {
             // Normal mode: use pre-calculated positioning
             x_pos_render = start_x;
@@ -838,14 +943,14 @@ static void render_current_view(void) {
         SDL_FRect dest_rect = {x_pos_render, y_pos_render, scaled_width, scaled_height};
         SDL_RenderTexture(viewer.renderer, current_display_view->texture, &current_display_view->crop_rect, &dest_rect);
 
-        SDL_Rect left_rect_gradient = {0, 0, overall_content_start_x, display_area_height};
+        SDL_Rect left_rect_gradient = {0, 0, (int)overall_content_start_x, (int)display_area_height};
         if (left_rect_gradient.w > 0.5f) { // Use a small threshold for float comparison
             render_horizontal_gradient_hsl(viewer.renderer, left_rect_gradient, current_display_view->left_edge_color, false);
         }
 
-        SDL_Rect right_rect_gradient = {overall_content_end_x, 0,
-                                    display_area_width - overall_content_end_x,
-                                    display_area_height};
+        SDL_Rect right_rect_gradient = {(int)overall_content_end_x, 0,
+                                    (int)(display_area_width - overall_content_end_x),
+                                    (int)display_area_height};
         if (right_rect_gradient.w > 0.5f) {
             render_horizontal_gradient_hsl(viewer.renderer, right_rect_gradient, current_display_view->right_edge_color, true);
         }
@@ -966,8 +1071,21 @@ static int load_view_surfaces_in_thread(void *data) {
             // Load the image using FreeImage
             image->bitmap = load_image_file(image->path);
             if (!image->bitmap) {
-                fprintf(stderr, "Failed to load image %s with FreeImage\n", image->path);
+                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to load image %s with FreeImage", image->path);
                 return -1;
+            }
+        }
+
+        int width = FreeImage_GetWidth(image->bitmap);
+        int height = FreeImage_GetHeight(image->bitmap);
+
+        // disabled for now
+        if (false && height < viewer.drawable_height) {
+            // Upscale the image if needed
+            FIBITMAP *upscaled = upscale(image->path, 4, NULL, NULL);
+            if (upscaled) {
+                FreeImage_Unload(image->bitmap);
+                image->bitmap = upscaled;
             }
         }
 
@@ -975,7 +1093,7 @@ static int load_view_surfaces_in_thread(void *data) {
             // Load the image as a surface using FreeImage
             image->surface = create_surface(image->bitmap, options);
             if (!image->surface) {
-                fprintf(stderr, "Failed to load image %s with FreeImage\n", image->path);
+                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to load image %s with FreeImage", image->path);
                 return -1;
             }
         }
@@ -993,7 +1111,7 @@ static int load_view_surfaces_in_thread(void *data) {
         // create a new surface for the combined texture
         surface = SDL_CreateSurface(total_width, max_height, surface->format);
         if (!surface) {
-            fprintf(stderr, "Failed to create combined surface: %s\n", SDL_GetError());
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create combined surface: %s", SDL_GetError());
             return -1;
         }
 
@@ -1005,7 +1123,7 @@ static int load_view_surfaces_in_thread(void *data) {
             // Copy the image surface to the combined surface
             SDL_Rect dst_rect = {current_x, 0, image->surface->w, image->surface->h};
             if (!SDL_BlitSurface(image->surface, NULL, surface, &dst_rect)) {
-                fprintf(stderr, "Failed to blit image %s: %s\n", image->path, SDL_GetError());
+                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to blit image %s: %s", image->path, SDL_GetError());
                 SDL_DestroySurface(surface);
                 return -1;
             }
@@ -1294,7 +1412,7 @@ static SDL_Texture* render_text(const char *text, SDL_Color color) {
 
     SDL_Surface *surface = TTF_RenderText_Blended(viewer.font, text, 0, color);
     if (!surface) {
-        fprintf(stderr, "Failed to render text: %s\n", SDL_GetError());
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to render text: %s", SDL_GetError());
         return NULL;
     }
 
@@ -1302,7 +1420,7 @@ static SDL_Texture* render_text(const char *text, SDL_Color color) {
     SDL_DestroySurface(surface);
 
     if (!texture) {
-        fprintf(stderr, "Failed to create texture from text: %s\n", SDL_GetError());
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create texture from text: %s", SDL_GetError());
     }
 
     return texture;
@@ -1318,19 +1436,19 @@ static bool select_monitor(int monitor_index, int *x, int *y) {
     int num_displays;
     SDL_DisplayID* display_id = SDL_GetDisplays(&num_displays);
     if (num_displays <= 0) {
-        fprintf(stderr, "No video displays available: %s\n", SDL_GetError());
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "No video displays available: %s", SDL_GetError());
         return false;
     }
     SDL_free(display_id);
 
     if (monitor_index < 0 || monitor_index >= num_displays) {
-        fprintf(stderr, "Invalid monitor index: %d\n", monitor_index);
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Invalid monitor index: %d", monitor_index);
         return false;
     }
 
     SDL_Rect bounds;
     if (SDL_GetDisplayBounds(monitor_index, &bounds) != 0) {
-        fprintf(stderr, "Failed to get display bounds for monitor %d: %s\n", monitor_index, SDL_GetError());
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to get display bounds for monitor %d: %s", monitor_index, SDL_GetError());
         return false;
     }
 
@@ -1342,7 +1460,7 @@ static bool select_monitor(int monitor_index, int *x, int *y) {
 static void create_texture(SDL_Renderer *renderer, ImageView *view) {
     view->texture = SDL_CreateTextureFromSurface(renderer, view->surface);
     if (!view->texture) {
-        fprintf(stderr, "Failed to create texture: %s\n", SDL_GetError());
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create texture: %s", SDL_GetError());
     }
 }
 
@@ -1410,7 +1528,7 @@ static void generate_default_views() {
     while (i < viewer.image_count) {
         ImageView *view = create_view_node_after(prev_view);
         if (!view) {
-            fprintf(stderr, "Failed to create view node\n");
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create view node");
             return;
         }
         
@@ -1436,7 +1554,7 @@ static void generate_default_views() {
 static ImageView* create_view_node_after(ImageView* prev_view) {
     ImageView *view = malloc(sizeof(ImageView));
     if (!view) {
-        fprintf(stderr, "Failed to allocate memory for view node\n");
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to allocate memory for view node");
         return NULL;
     }
     

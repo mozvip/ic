@@ -99,16 +99,18 @@ struct ViewerState {
     ImageView *current_view_node;  // Pointer to current view node
     int current_view_index;        // Current view index (for compatibility)
     int view_count;                // Total number of views
-    bool right_to_left;            // Reading direction (for manga)
 
-    // Zoom settings
+    // Zoom and pan settings
     float zoom_level;              // Current zoom level (1.0 = 100%)
     bool zoomed;                   // Whether we are currently in zoomed mode
-    int zoom_center_x;             // X-coordinate center of zoom (in window coordinates)
-    int zoom_center_y;             // Y-coordinate center of zoom (in window coordinates)
+    float zoom_center_x;           // X-coordinate center of zoom (in window coordinates)
+    float zoom_center_y;           // Y-coordinate center of zoom (in window coordinates)
     float max_zoom;                // Maximum zoom level (e.g., 3.0 = 300%)
-    
-    Uint32 preload_event_type;     // SDL user event type for preload completion
+    float pan_offset_x;            // X offset for panning
+    float pan_offset_y;            // Y offset for panning
+
+    // User event for preloading
+    Uint32 preload_event_type;
 };
 
 // Declare viewer as an extern variable of this struct type
@@ -120,6 +122,7 @@ bool comic_viewer_init(int monitor_index);
 
 // Load a comic file or directory
 bool comic_viewer_load(const char *path);
+bool comic_viewer_load_and_display(const char *path_to_folder, const char *image_file_to_display);
 
 // Run the main viewer loop
 void comic_viewer_run(void);

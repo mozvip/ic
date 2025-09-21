@@ -41,6 +41,34 @@ int image_name_compare(const void *a, const void *b) {
     return strverscmp(s1, s2);
 }
 
+char *dir_name(char *path) {
+    if (!path) return NULL;
+    char *last_slash = strrchr(path, '/');
+    char *last_backslash = strrchr(path, '\\');
+    char *last_separator = last_slash > last_backslash ? last_slash : last_backslash;
+    if (last_separator) {
+        if (last_separator == path) {
+            // Path is like "/file" or "\file", return root
+            path[1] = '\0';
+        } else {
+            *last_separator = '\0';
+        }
+    } else {
+        // No separator found, return "."
+        strcpy(path, ".");
+    }
+    return path;
+}
+
+bool is_directory(char *path) {
+    struct stat path_stat;
+    if (stat(path, &path_stat) != 0) {
+        // Error accessing the path
+        return false;
+    }
+    return S_ISDIR(path_stat.st_mode);
+}
+
 bool is_image_file(const char *filename) {
     if (!filename) return false;
     
@@ -48,7 +76,6 @@ bool is_image_file(const char *filename) {
     const char *ext = strrchr(filename, '.');
     if (!ext) return false;
     
-    // Check if it's one of our supported image formats
     ext++; // Skip the '.'
     return (strcasecmp(ext, "jpg") == 0 ||
             strcasecmp(ext, "jpeg") == 0 ||
