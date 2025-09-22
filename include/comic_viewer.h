@@ -59,8 +59,6 @@ typedef struct ArchiveHandle {
 typedef struct ImageView {
     int image_indices[MAX_IMAGES_PER_VIEW];     // Indices of images in this view
     int count;                                  // Number of images in this view
-    int total_width;                            // Total width of the view
-    int max_height;                             // Max height of the view
     SDL_FRect crop_rect;                        // Crop rectangle for the view
     SDL_Surface *surface;                       // Combined surface for the view
     SDL_Texture *texture;                       // Loaded texture
@@ -108,6 +106,14 @@ struct ViewerState {
     float max_zoom;                // Maximum zoom level (e.g., 3.0 = 300%)
     float pan_offset_x;            // X offset for panning
     float pan_offset_y;            // Y offset for panning
+
+    // Panning dynamics (velocity/acceleration to allow easing/acceleration)
+    float pan_velocity_x;          // Current pan velocity X (pixels/sec)
+    float pan_velocity_y;          // Current pan velocity Y (pixels/sec)
+    float pan_acceleration;        // Acceleration applied when cursor at edge (pixels/sec^2)
+    float pan_max_speed;           // Maximum panning speed (pixels/sec)
+    float pan_damping;             // Damping factor applied when cursor leaves edges (per second)
+    Uint64 last_update_ticks;      // Last tick used to compute dt for panning
 
     // User event for preloading
     Uint32 preload_event_type;

@@ -1,7 +1,6 @@
 /**
  * comic_loaders_pdf.c
- * Implementation of PDF comic loading using pdfimages command-line tool
- * Simple version without threading - loads pages sequentially
+ * Implementation of PDF comic loading using pdftoppm and pdfinfo command-line tools
  */
 
 #include <stdio.h>
@@ -75,18 +74,14 @@ static char* extract_pdf_page(const char *pdf_path, int page_index, const char *
 
 ArchiveHandle* pdf_open(const char *path, int *total_images, ProgressCallback progress_cb) {
     if (progress_cb) {
-        progress_cb(0.0f, "Opening PDF document...");
+        progress_cb(0.0f, "Creating temp folder...");
     }    
-   
-    if (progress_cb) {
-        progress_cb(0.1f, "Reading PDF document info...");
-    }
     
     // Create temp directory for images
     char temp_dir[256];
     snprintf(temp_dir, sizeof(temp_dir), "/tmp/ic_viewer_pdf_XXXXXX");
     if (mkdtemp(temp_dir) == NULL) {
-        fprintf(stderr, "Failed to create temporary directory\n");
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create temporary directory");
         if (progress_cb) {
             progress_cb(1.0f, "Failed to create temporary directory");
         }
@@ -94,13 +89,13 @@ ArchiveHandle* pdf_open(const char *path, int *total_images, ProgressCallback pr
     }
     
     if (progress_cb) {
-        progress_cb(0.2f, "Getting page count from the PDF...");
+        progress_cb(0.2f, "Getting page count...");
     }
     // Get number of pages using pdfinfo
     int n_pages = get_pdf_page_count(path);
     
     if (n_pages <= 0) {
-        fprintf(stderr, "PDF document has no pages or could not determine page count\n");
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "PDF document has no pages or could not determine page count");
         if (progress_cb) {
             progress_cb(1.0f, "PDF document has no pages or could not determine page count");
         }
@@ -108,7 +103,7 @@ ArchiveHandle* pdf_open(const char *path, int *total_images, ProgressCallback pr
     }
     
     if (progress_cb) {
-        progress_cb(0.6f, "Allocating memory for page indices...");
+        progress_cb(0.4f, "Allocating memory for page indices...");
     }
 
     // Allocate handle
@@ -119,6 +114,10 @@ ArchiveHandle* pdf_open(const char *path, int *total_images, ProgressCallback pr
         }
         return NULL;
     }
+
+    if (progress_cb) {
+        progress_cb(0.6f, "Initializing memory...");
+    }    
     
     // Initialize handle
     handle->type = ARCHIVE_TYPE_PDF;
@@ -174,7 +173,7 @@ bool pdf_get_image(ArchiveHandle *handle, int index, char **out_path) {
     char *result_path = extract_pdf_page(handle->path, page_index, output_prefix, expected_path, &success);
     
     if (!success || result_path == NULL) {
-        fprintf(stderr, "Failed to render page %d\n", page_index + 1);
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to render page %d", page_index + 1);
         if (result_path) {
             free(result_path);
         }

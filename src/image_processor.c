@@ -13,8 +13,7 @@ ImageProcessingOptions* get_default_processing_options(void) {
     options->brightness = 0.0;
     options->contrast = 0.0;
     options->saturation = 1.0;
-    options->auto_levels = true;
-    options->color_balance = false;
+    options->color_balance = true;
     options->sharpen = false;
 
     return options;

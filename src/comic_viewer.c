@@ -33,10 +33,11 @@ ImageProcessingOptions* options;
 // Forward declarations for internal functions
 static void free_resources(void);
 static void handle_events(void);
+static void update_state(void);
 static void render_current_view(void);
 static void display_info();
 static bool prepare_image(int index);
-static void unload_image(int index);
+static void unload_image(ImageEntry *image);
 static void toggle_fullscreen(void);
 static void view_changed(ImageView *old_view_node, ImageView *new_view_node);
 static SDL_Texture* render_text(const char *text, SDL_Color color);
@@ -282,6 +283,13 @@ bool comic_viewer_init(int monitor_index) {
     viewer.max_zoom = 3.0f;
     viewer.pan_offset_x = 0;
     viewer.pan_offset_y = 0;
+    // Initialize panning dynamics
+    viewer.pan_velocity_x = 0.0f;
+    viewer.pan_velocity_y = 0.0f;
+    viewer.pan_acceleration = 200.0f; // pixels per second squared (starting acceleration)
+    viewer.pan_max_speed = 1000.0f;   // max pixels per second
+    viewer.pan_damping = 4.0f;        // damping factor per second when cursor leaves edge
+    viewer.last_update_ticks = SDL_GetTicks();
 
     for (int i = 0; i < MAX_IMAGES; i++) {
         viewer.images[i].path = NULL;
@@ -418,7 +426,11 @@ void unload_view(ImageView *view) {
     // Unload images for the specified view
     for (int i = 0; i < view->count; i++) {
         int img_index = view->image_indices[i];
-        unload_image(img_index);
+        unload_image(&viewer.images[img_index]);
+    }
+    if (view->surface) {
+        SDL_DestroySurface(view->surface);
+        view->surface = NULL;
     }
     // Free the texture if it exists
     if (view->texture) {
@@ -450,6 +462,9 @@ void comic_viewer_run(void) {
     while (viewer.running) {
         // Handle events
         handle_events();
+
+        // Update state based on continuous input (like mouse position)
+        update_state();
 
         // Render the current image
         render_current_view();
@@ -497,16 +512,14 @@ static bool prepare_image(int index) {
     }
 }
 
-static void unload_image(int index) {
-    if (index < 0 || index >= viewer.image_count) return;
-
-    if (viewer.images[index].surface) {
-        SDL_DestroySurface(viewer.images[index].surface);
-        viewer.images[index].surface = NULL;
+static void unload_image(ImageEntry *image) {
+    if (image->surface) {
+        SDL_DestroySurface(image->surface);
+        image->surface = NULL;
     }
-    if (viewer.images[index].bitmap) {
-        FreeImage_Unload(viewer.images[index].bitmap);
-        viewer.images[index].bitmap = NULL;
+    if (image->bitmap) {
+        FreeImage_Unload(image->bitmap);
+        image->bitmap = NULL;
     }
 }
 
@@ -546,22 +559,7 @@ static void handle_events(void) {
                 break;
                 
             case SDL_EVENT_MOUSE_MOTION:
-                if (viewer.zoomed) {
-                    const int pan_margin = 50; // pixels from edge to start panning
-                    const float pan_speed = 10.0f;
-
-                    if (event.motion.x < pan_margin) {
-                        viewer.pan_offset_x += pan_speed;
-                    } else if (event.motion.x > viewer.window_width - pan_margin) {
-                        viewer.pan_offset_x -= pan_speed;
-                    }
-
-                    if (event.motion.y < pan_margin) {
-                        viewer.pan_offset_y += pan_speed;
-                    } else if (event.motion.y > viewer.window_height - pan_margin) {
-                        viewer.pan_offset_y -= pan_speed;
-                    }
-                }
+                // This is now handled in update_state() for continuous panning
                 break;
 
             case SDL_EVENT_MOUSE_BUTTON_DOWN:
@@ -687,18 +685,26 @@ static void handle_events(void) {
                     case SDLK_HOME:
                         // First image
                         if (get_current_view() != 0) {
-                            view_changed(viewer.first_view, viewer.current_view_node);
+                            if (viewer.load_thread && SDL_GetThreadState(viewer.load_thread) == SDL_THREAD_ALIVE) {
+                                return;
+                            }                            
+                            viewer.current_view_index = 0;
+                            view_changed(viewer.current_view_node, viewer.first_view);
                         }
                         break;
                         
                     case SDLK_END:
                         // Last image
                         {
+                            if (viewer.load_thread && SDL_GetThreadState(viewer.load_thread) == SDL_THREAD_ALIVE) {
+                                return;
+                            }                            
                             ImageView *last_view = viewer.first_view;
                             while (last_view->next) {
                                 last_view = last_view->next;
                             }
-                            view_changed(last_view, viewer.current_view_node);
+                            viewer.current_view_index = viewer.view_count - 1;
+                            view_changed(viewer.current_view_node, last_view);
                         }
                         break;
 
@@ -829,6 +835,72 @@ static void handle_events(void) {
                 break;
         }
     }
+}
+
+static void update_state(void) {
+    if (!viewer.zoomed) {
+        // Reset velocities when not zoomed
+        viewer.pan_velocity_x = 0.0f;
+        viewer.pan_velocity_y = 0.0f;
+        viewer.last_update_ticks = SDL_GetTicks();
+        return;
+    }
+
+    // Compute delta time in seconds
+    Uint64 now = SDL_GetTicks();
+    float dt = (now - viewer.last_update_ticks) / 1000.0f;
+    if (dt <= 0.0f) dt = 0.001f; // minimum step
+    viewer.last_update_ticks = now;
+
+    float mouse_x, mouse_y;
+    SDL_GetMouseState(&mouse_x, &mouse_y);
+
+    const int pan_margin = 60; // pixels from edge to start panning
+
+    // Determine target acceleration direction based on mouse position
+    float accel_x = 0.0f;
+    float accel_y = 0.0f;
+
+    if (mouse_x < pan_margin) {
+        accel_x = viewer.pan_acceleration;
+    } else if (mouse_x > viewer.window_width - pan_margin) {
+        accel_x = -viewer.pan_acceleration;
+    }
+
+    if (mouse_y < pan_margin) {
+        accel_y = viewer.pan_acceleration;
+    } else if (mouse_y > viewer.window_height - pan_margin) {
+        accel_y = -viewer.pan_acceleration;
+    }
+
+    // Integrate velocity
+    viewer.pan_velocity_x += accel_x * dt;
+    viewer.pan_velocity_y += accel_y * dt;
+
+    // If no acceleration on an axis, apply damping towards zero
+    if (accel_x == 0.0f) {
+        // exponential-like damping
+        float damping_factor = 1.0f - viewer.pan_damping * dt;
+        if (damping_factor < 0.0f) damping_factor = 0.0f;
+        viewer.pan_velocity_x *= damping_factor;
+        if (fabsf(viewer.pan_velocity_x) < 1.0f) viewer.pan_velocity_x = 0.0f;
+    }
+    if (accel_y == 0.0f) {
+        float damping_factor = 1.0f - viewer.pan_damping * dt;
+        if (damping_factor < 0.0f) damping_factor = 0.0f;
+        viewer.pan_velocity_y *= damping_factor;
+        if (fabsf(viewer.pan_velocity_y) < 1.0f) viewer.pan_velocity_y = 0.0f;
+    }
+
+    // Clamp speeds
+    if (viewer.pan_velocity_x > viewer.pan_max_speed) viewer.pan_velocity_x = viewer.pan_max_speed;
+    if (viewer.pan_velocity_x < -viewer.pan_max_speed) viewer.pan_velocity_x = -viewer.pan_max_speed;
+    if (viewer.pan_velocity_y > viewer.pan_max_speed) viewer.pan_velocity_y = viewer.pan_max_speed;
+    if (viewer.pan_velocity_y < -viewer.pan_max_speed) viewer.pan_velocity_y = -viewer.pan_max_speed;
+
+    // Integrate position
+    viewer.pan_offset_x += viewer.pan_velocity_x * dt;
+    viewer.pan_offset_y += viewer.pan_velocity_y * dt;
 }
 
 static void render_current_view(void) {
@@ -1469,7 +1541,7 @@ static void update_progress(float progress, const char *message) {
     progress_bar_update(progress, message);
 }
 
-static void view_changed(ImageView *old_view_node, ImageView *new_view_node) {
+static void view_changed(ImageView *old_view_node, ImageView *new_view_node) {    
     // Update the page change timer
     viewer.last_page_change_time = SDL_GetTicks();
     viewer.show_progress_indicator = true;
@@ -1487,6 +1559,8 @@ static void view_changed(ImageView *old_view_node, ImageView *new_view_node) {
             unload_view(old_view_node);
         }
     }
+
+    viewer.current_view_node = new_view_node;
 }
 
 void previous_view() {
@@ -1498,9 +1572,8 @@ void previous_view() {
     }    
 
     ImageView *old_view_node = viewer.current_view_node;
-    viewer.current_view_node = viewer.current_view_node->prev;
     viewer.current_view_index--;
-    view_changed(old_view_node, viewer.current_view_node);
+    view_changed(viewer.current_view_node, viewer.current_view_node->prev);
 }
 
 void next_view() {
@@ -1509,12 +1582,11 @@ void next_view() {
     }
     if (viewer.load_thread && SDL_GetThreadState(viewer.load_thread) == SDL_THREAD_ALIVE) {
         return;
-    }    
+    }
 
     ImageView *old_view_node = viewer.current_view_node;
-    viewer.current_view_node = viewer.current_view_node->next;
     viewer.current_view_index++;
-    view_changed(old_view_node, viewer.current_view_node);
+    view_changed(viewer.current_view_node, viewer.current_view_node->next);
 }
 
 static void generate_default_views() {
@@ -1560,8 +1632,6 @@ static ImageView* create_view_node_after(ImageView* prev_view) {
     
     // Initialize the view
     view->count = 1; // Default to one image per view
-    view->total_width = 0;
-    view->max_height = 0;
     view->crop_rect = (SDL_FRect){0, 0, 0, 0};
     view->next = NULL;
     view->prev = prev_view;

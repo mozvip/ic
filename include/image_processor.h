@@ -11,7 +11,6 @@ typedef struct {
     double brightness;      // -100 to 100 (0 = no change)
     double contrast;        // -100 to 100 (0 = no change)
     double saturation;      // 0.0 - 2.0 (1.0 = no change)
-    bool auto_levels;       // Auto contrast/brightness
     bool color_balance;     // Auto color balance
     bool sharpen;          // Apply unsharp mask
     bool enhancement_enabled;

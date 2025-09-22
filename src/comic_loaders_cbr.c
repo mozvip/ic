@@ -33,7 +33,7 @@ static bool check_unrar_available() {
 
 ArchiveHandle* cbr_open(const char *path, int *total_images, ProgressCallback progress_cb) {
     if (progress_cb) {
-        progress_cb(0.0f, "Opening RAR archive...");
+        progress_cb(0.0f, "Checking RAR support...");
     }
     
     // Check if unrar is available
@@ -45,6 +45,10 @@ ArchiveHandle* cbr_open(const char *path, int *total_images, ProgressCallback pr
         return NULL;
     }
     
+    if (progress_cb) {
+        progress_cb(0.2f, "Creating temp folder...");
+    }
+
     // Create a temporary directory for extraction
     char temp_dir[256];
     snprintf(temp_dir, sizeof(temp_dir), "/tmp/ic_viewer_XXXXXX");
@@ -54,7 +58,7 @@ ArchiveHandle* cbr_open(const char *path, int *total_images, ProgressCallback pr
     }
     
     if (progress_cb) {
-        progress_cb(0.1f, "Reading archive contents...");
+        progress_cb(0.4f, "Prepare memory...");
     }
     
     // Allocate handle
@@ -72,6 +76,10 @@ ArchiveHandle* cbr_open(const char *path, int *total_images, ProgressCallback pr
     handle->entry_names = NULL;
     handle->page_indices = NULL;
     
+    if (progress_cb) {
+        progress_cb(0.5f, "Analyzing archive...");
+    }
+
     // Use unrar command to list files in the archive
     const char *args[] = {"unrar", "lb", path, NULL};
     
@@ -82,6 +90,10 @@ ArchiveHandle* cbr_open(const char *path, int *total_images, ProgressCallback pr
         return NULL;
     }
     
+    if (progress_cb) {
+        progress_cb(0.6f, "Parsing rar output...");
+    }
+
     // Read list of files from unrar output
     char *line = strtok(output, "\n");
     int capacity = 100;  // Initial capacity
@@ -96,7 +108,7 @@ ArchiveHandle* cbr_open(const char *path, int *total_images, ProgressCallback pr
     }
 
     if (progress_cb) {
-        progress_cb(0.4f, "Creating list of images...");
+        progress_cb(0.8f, "Creating list of images...");
     }    
     
     while (line != NULL) {
