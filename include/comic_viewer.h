@@ -90,6 +90,7 @@ struct ViewerState {
     // Progress indicator display timer
     Uint64 last_page_change_time;  // Time when the last page change occurred
     bool show_progress_indicator;  // Whether to show the progress indicator
+    bool show_zoom_pan_info;       // Whether to show zoom/pan info overlay (toggled by 'i')
 
     // Multi-image display settings
     bool multiple_images_mode;     // Whether to display multiple images
@@ -115,8 +116,23 @@ struct ViewerState {
     float pan_damping;             // Damping factor applied when cursor leaves edges (per second)
     Uint64 last_update_ticks;      // Last tick used to compute dt for panning
 
+    // Cropping interaction state
+    bool cropping_mode;            // Whether we are in cropping mode
+    bool cropping_active;          // Whether a crop drag is active
+    float crop_start_x;            // Crop drag start X (window coords)
+    float crop_start_y;            // Crop drag start Y (window coords)
+    float crop_current_x;          // Current cursor X during crop (window coords)
+    float crop_current_y;          // Current cursor Y during crop (window coords)
+    Uint8 cropping_button;         // Mouse button used to start the crop
+
     // User event for preloading
     Uint32 preload_event_type;
+
+    // Gamepad state
+    SDL_Gamepad *gamepad;          // Opened gamepad handle (if any)
+    SDL_JoystickID gamepad_id;     // ID of the opened gamepad
+    char gamepad_status_msg[128];  // Short status message to display (e.g. "Gamepad connected")
+    Uint64 gamepad_status_until;   // Timestamp in ms until which the status should be shown
 };
 
 // Declare viewer as an extern variable of this struct type

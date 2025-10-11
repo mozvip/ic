@@ -58,7 +58,7 @@ ArchiveHandle* cbr_open(const char *path, int *total_images, ProgressCallback pr
     }
     
     if (progress_cb) {
-        progress_cb(0.4f, "Prepare memory...");
+        progress_cb(0.3f, "Prepare memory...");
     }
     
     // Allocate handle
@@ -91,7 +91,7 @@ ArchiveHandle* cbr_open(const char *path, int *total_images, ProgressCallback pr
     }
     
     if (progress_cb) {
-        progress_cb(0.6f, "Parsing rar output...");
+        progress_cb(0.8f, "Parsing rar output...");
     }
 
     // Read list of files from unrar output
@@ -108,7 +108,7 @@ ArchiveHandle* cbr_open(const char *path, int *total_images, ProgressCallback pr
     }
 
     if (progress_cb) {
-        progress_cb(0.8f, "Creating list of images...");
+        progress_cb(0.9f, "Creating list of images...");
     }    
     
     while (line != NULL) {
@@ -150,7 +150,7 @@ ArchiveHandle* cbr_open(const char *path, int *total_images, ProgressCallback pr
     }
     
     if (progress_cb) {
-        progress_cb(0.8f, "Sorting images...");
+        progress_cb(0.95f, "Sorting images...");
     }
     
     // Sort entries by name

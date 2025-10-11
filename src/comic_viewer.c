@@ -22,6 +22,8 @@
 #include "progress_indicator.h" // Moved here
 #include "image_loader.h" // Add FreeImage loader
 #include "upscale.h"
+// Rendering module (viewer_display_info, viewer_render_current_view, viewer_render_text)
+#include "render.h"
 
 SDL_Color white = {255, 255, 255, 255}; // White
 
@@ -34,13 +36,10 @@ ImageProcessingOptions* options;
 static void free_resources(void);
 static void handle_events(void);
 static void update_state(void);
-static void render_current_view(void);
-static void display_info();
 static bool prepare_image(int index);
 static void unload_image(ImageEntry *image);
 static void toggle_fullscreen(void);
 static void view_changed(ImageView *old_view_node, ImageView *new_view_node);
-static SDL_Texture* render_text(const char *text, SDL_Color color);
 static bool select_monitor(int monitor_index, int *x, int *y);
 // Preload thread function and starter
 static int load_view_surfaces_in_thread(void *data);
@@ -151,8 +150,8 @@ bool comic_viewer_init(int monitor_index) {
     // Set best quality for scaling operations
     SDL_SetHint("SDL_RENDER_SCALE_QUALITY", "2");  // 0=nearest, 1=linear, 2="best"
     
-    // Initialize SDL
-    if (!SDL_Init(SDL_INIT_VIDEO)) {
+    // Initialize SDL (include gamepad support if available)
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "SDL could not initialize! SDL_Error: %s", SDL_GetError());
         return false;
     }
@@ -274,6 +273,7 @@ bool comic_viewer_init(int monitor_index) {
     // Initialize progress indicator timer
     viewer.last_page_change_time = 0;
     viewer.show_progress_indicator = false;
+    viewer.show_zoom_pan_info = false;
 
     // Initialize zoom settings
     viewer.zoom_level = 1.0f;
@@ -291,6 +291,19 @@ bool comic_viewer_init(int monitor_index) {
     viewer.pan_damping = 4.0f;        // damping factor per second when cursor leaves edge
     viewer.last_update_ticks = SDL_GetTicks();
 
+    // Initialize cropping state
+    viewer.cropping_mode = false;
+    viewer.cropping_active = false;
+    viewer.crop_start_x = viewer.crop_start_y = 0.0f;
+    viewer.crop_current_x = viewer.crop_current_y = 0.0f;
+    viewer.cropping_button = 0;
+
+    // Initialize gamepad state
+    viewer.gamepad = NULL;
+    viewer.gamepad_id = 0;
+    viewer.gamepad_status_msg[0] = '\0';
+    viewer.gamepad_status_until = 0;
+
     for (int i = 0; i < MAX_IMAGES; i++) {
         viewer.images[i].path = NULL;
         viewer.images[i].surface = NULL;
@@ -298,6 +311,20 @@ bool comic_viewer_init(int monitor_index) {
 
     // Register a user event type for preload completion
     viewer.preload_event_type = SDL_RegisterEvents(1);
+
+    // Open the first available gamepad (if any)
+    int gp_count = 0;
+    SDL_JoystickID *gplist = SDL_GetGamepads(&gp_count);
+    if (gplist && gp_count > 0) {
+        viewer.gamepad = SDL_OpenGamepad(gplist[0]);
+        if (viewer.gamepad) {
+            viewer.gamepad_id = SDL_GetGamepadID(viewer.gamepad);
+            const char *name = SDL_GetGamepadName(viewer.gamepad);
+            snprintf(viewer.gamepad_status_msg, sizeof(viewer.gamepad_status_msg), "Gamepad connected: %s", name ? name : "(unknown)");
+            viewer.gamepad_status_until = SDL_GetTicks() + 3000; // show for 3s
+        }
+    }
+    if (gplist) SDL_free(gplist);
 
     return true;
 }
@@ -467,7 +494,7 @@ void comic_viewer_run(void) {
         update_state();
 
         // Render the current image
-        render_current_view();
+        viewer_render_current_view();
     }
 
     // Cleanup resources
@@ -485,6 +512,12 @@ void comic_viewer_cleanup(void) {
     if (viewer.archive) {
         archive_close(viewer.archive);
         viewer.archive = NULL;
+    }
+    // Close gamepad if open
+    if (viewer.gamepad) {
+        SDL_CloseGamepad(viewer.gamepad);
+        viewer.gamepad = NULL;
+        viewer.gamepad_id = 0;
     }
     
     free_resources();
@@ -558,9 +591,7 @@ static void handle_events(void) {
                 }
                 break;
                 
-            case SDL_EVENT_MOUSE_MOTION:
-                // This is now handled in update_state() for continuous panning
-                break;
+            
 
             case SDL_EVENT_MOUSE_BUTTON_DOWN:
                 if (event.button.button == SDL_BUTTON_LEFT) {
@@ -577,8 +608,72 @@ static void handle_events(void) {
                         viewer.zoom_center_y = event.button.y;
                         viewer.zoom_level = 2.0f; // Set zoom level to 200%
                     }
+                } else if (event.button.button == SDL_BUTTON_MIDDLE) {
+                    // Middle mouse button: enter cropping mode and start drag
+                    viewer.cropping_mode = true;
+                    viewer.cropping_active = true;
+                    viewer.cropping_button = event.button.button;
+                    viewer.crop_start_x = event.button.x;
+                    viewer.crop_start_y = event.button.y;
+                    viewer.crop_current_x = event.button.x;
+                    viewer.crop_current_y = event.button.y;
                 }
                 break;
+            case SDL_EVENT_MOUSE_MOTION:
+                // Update crop rectangle when dragging in cropping mode
+                if (viewer.cropping_mode && viewer.cropping_active) {
+                    viewer.crop_current_x = event.motion.x;
+                    viewer.crop_current_y = event.motion.y;
+                }
+                break;
+            case SDL_EVENT_MOUSE_BUTTON_UP:
+                if (viewer.cropping_mode && viewer.cropping_active && event.button.button == viewer.cropping_button) {
+                    // Finish cropping
+                    viewer.cropping_active = false;
+                    // Keep cropping_mode true so overlay remains until user cancels or applies
+                }
+                break;
+
+            case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+                // Map left/right shoulder to page navigation
+                if (event.gbutton.button == SDL_GAMEPAD_BUTTON_LEFT_SHOULDER) {
+                    previous_view();
+                } else if (event.gbutton.button == SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER) {
+                    next_view();
+                }
+                break;
+
+            case SDL_EVENT_GAMEPAD_ADDED: {
+                // Open the newly added gamepad (device index in event.gdevice.which)
+                SDL_JoystickID which = event.gdevice.which;
+                // If we already have a gamepad open, close it first
+                if (viewer.gamepad) {
+                    SDL_CloseGamepad(viewer.gamepad);
+                    viewer.gamepad = NULL;
+                    viewer.gamepad_id = 0;
+                }
+                // Try to open the new gamepad by device index
+                viewer.gamepad = SDL_OpenGamepad((int)which);
+                if (viewer.gamepad) {
+                    viewer.gamepad_id = SDL_GetGamepadID(viewer.gamepad);
+                    const char *name = SDL_GetGamepadName(viewer.gamepad);
+                    snprintf(viewer.gamepad_status_msg, sizeof(viewer.gamepad_status_msg), "Gamepad connected: %s", name ? name : "(unknown)");
+                    viewer.gamepad_status_until = SDL_GetTicks() + 3000;
+                }
+            }
+            break;
+
+            case SDL_EVENT_GAMEPAD_REMOVED: {
+                SDL_JoystickID which = event.gdevice.which;
+                if (viewer.gamepad && viewer.gamepad_id == which) {
+                    SDL_CloseGamepad(viewer.gamepad);
+                    viewer.gamepad = NULL;
+                    viewer.gamepad_id = 0;
+                    snprintf(viewer.gamepad_status_msg, sizeof(viewer.gamepad_status_msg), "Gamepad disconnected");
+                    viewer.gamepad_status_until = SDL_GetTicks() + 3000;
+                }
+            }
+            break;
                 
             case SDL_EVENT_KEY_DOWN:
                 // If file browser active, delegate keys first (except we allow ESC handled inside)
@@ -589,8 +684,73 @@ static void handle_events(void) {
                     }
                 }
                 switch (event.key.key) {
+                    case SDLK_I:
+                        // Toggle zoom/pan info overlay
+                        viewer.show_zoom_pan_info = !viewer.show_zoom_pan_info;
+                        break;
                     case SDLK_RETURN:
                     case SDLK_KP_ENTER:
+                        // Apply crop if cropping mode, else toggle file browser
+                        if (viewer.cropping_mode) {
+                            // Map selection rectangle in window coords to texture coords of current view
+                            ImageView *cv = viewer.current_view_node;
+                            if (cv && cv->texture) {
+                                float display_area_width = (float)viewer.drawable_width;
+                                float display_area_height = (float)viewer.drawable_height;
+                                float scale_h = display_area_height / cv->texture->h;
+                                float scale_w = display_area_width / cv->texture->w;
+                                float scale = fminf(scale_h, scale_w);
+                                float unzoomed_width = cv->texture->w * scale;
+                                float unzoomed_height = cv->texture->h * scale;
+                                float unzoomed_x = (display_area_width - unzoomed_width) / 2.0f;
+                                float unzoomed_y = (display_area_height - unzoomed_height) / 2.0f;
+
+                                float final_scale = scale;
+                                float x_pos_render = unzoomed_x;
+                                float y_pos_render = unzoomed_y;
+                                if (viewer.zoomed) {
+                                    final_scale = scale * viewer.zoom_level;
+                                    float cursor_relative_x = viewer.zoom_center_x - unzoomed_x;
+                                    float cursor_relative_y = viewer.zoom_center_y - unzoomed_y;
+                                    float zoomed_point_x = cursor_relative_x * viewer.zoom_level;
+                                    float zoomed_point_y = cursor_relative_y * viewer.zoom_level;
+                                    x_pos_render = viewer.zoom_center_x - zoomed_point_x + viewer.pan_offset_x;
+                                    y_pos_render = viewer.zoom_center_y - zoomed_point_y + viewer.pan_offset_y;
+                                }
+
+                                // Build selection rect
+                                float x1 = viewer.crop_start_x, y1 = viewer.crop_start_y;
+                                float x2 = viewer.crop_current_x, y2 = viewer.crop_current_y;
+                                float rx = fminf(x1, x2);
+                                float ry = fminf(y1, y2);
+                                float rw = fabsf(x2 - x1);
+                                float rh = fabsf(y2 - y1);
+
+                                // Compute intersection with image render rect
+                                SDL_FRect img_rect = { x_pos_render, y_pos_render, cv->texture->w * final_scale, cv->texture->h * final_scale };
+                                float ix = fmaxf(rx, img_rect.x);
+                                float iy = fmaxf(ry, img_rect.y);
+                                float iw = fminf(rx + rw, img_rect.x + img_rect.w) - ix;
+                                float ih = fminf(ry + rh, img_rect.y + img_rect.h) - iy;
+                                if (iw > 1 && ih > 1) {
+                                    // Map to texture space and update crop_rect
+                                    float tx = (ix - img_rect.x) / final_scale + cv->crop_rect.x;
+                                    float ty = (iy - img_rect.y) / final_scale + cv->crop_rect.y;
+                                    float tw = iw / final_scale;
+                                    float th = ih / final_scale;
+                                    // Clamp within original crop bounds
+                                    if (tx < cv->crop_rect.x) { tw -= (cv->crop_rect.x - tx); tx = cv->crop_rect.x; }
+                                    if (ty < cv->crop_rect.y) { th -= (cv->crop_rect.y - ty); ty = cv->crop_rect.y; }
+                                    if (tx + tw > cv->crop_rect.x + cv->crop_rect.w) tw = cv->crop_rect.x + cv->crop_rect.w - tx;
+                                    if (ty + th > cv->crop_rect.y + cv->crop_rect.h) th = cv->crop_rect.y + cv->crop_rect.h - ty;
+                                    cv->crop_rect = (SDL_FRect){ tx, ty, tw, th };
+                                }
+                            }
+                            // Exit cropping mode after apply
+                            viewer.cropping_mode = false;
+                            viewer.cropping_active = false;
+                            break;
+                        }
                         // Toggle file browser
                         if (!file_browser_is_active()) {
                             // Open at current comic directory or cwd if none
@@ -618,7 +778,14 @@ static void handle_events(void) {
                         }
                         break;
                     case SDLK_ESCAPE:
-                        viewer.running = false;
+                        // If cropping mode is active, cancel it; otherwise quit
+                        if (viewer.cropping_mode) {
+                            viewer.cropping_mode = false;
+                            viewer.cropping_active = false;
+                            break;
+                        } else {
+                            viewer.running = false;
+                        }
                         break;
 
                     case SDLK_1:
@@ -831,7 +998,7 @@ static void handle_events(void) {
                 
             case SDL_EVENT_WINDOW_EXPOSED:
                 // Window needs to be redrawn
-                render_current_view();
+                viewer_render_current_view();
                 break;
         }
     }
@@ -901,193 +1068,6 @@ static void update_state(void) {
     // Integrate position
     viewer.pan_offset_x += viewer.pan_velocity_x * dt;
     viewer.pan_offset_y += viewer.pan_velocity_y * dt;
-}
-
-static void render_current_view(void) {
-    // Clear the screen with black background
-    SDL_SetRenderDrawColor(viewer.renderer, 0, 0, 0, 255);
-    SDL_RenderClear(viewer.renderer);
-
-    ImageView *current_display_view = viewer.current_view_node;
-    if (!current_display_view->texture) {
-        // No image to display
-        display_info();
-        SDL_RenderPresent(viewer.renderer);
-        return;
-    }
-
-    float display_area_width = (float)viewer.drawable_width;
-    float display_area_height = (float)viewer.drawable_height;
-
-    float overall_content_start_x = display_area_width; // Initialize to max
-    float overall_content_end_x = 0.0f;                 // Initialize to min
-    
-    // Prepare for zoomed view calculations
-    float scale_multiplier = 1.0f;
-    
-    // If zoomed, calculate the offset and scale
-    if (viewer.zoomed) {
-        scale_multiplier = viewer.zoom_level;
-    }
-    
-    float total_width = 0;
-    float scale = 1.0f;
-    
-    float scale_height = display_area_height / current_display_view->texture->h;
-    float scale_width = display_area_width / current_display_view->texture->w;  
-
-    scale = fminf(scale_height, scale_width);
-    // Calculate total width of all images in the current view after scaling
-    total_width = current_display_view->texture->w * scale;
-    
-    float start_x = (display_area_width - total_width) / 2.0f;
-    
-    // Now do the actual rendering
-    if (current_display_view->texture) {
-        // Apply zoom scaling for rendering
-        float final_scale = scale;
-        if (viewer.zoomed) {
-            final_scale = scale * scale_multiplier;
-        }
-        
-        if (final_scale <= 1e-6f) final_scale = 1e-6f; // Prevent zero or negative scale
-
-        int scaled_width = (int)(current_display_view->texture->w * final_scale);
-        int scaled_height = (int)(current_display_view->texture->h * final_scale);
-        if (scaled_width <= 0) scaled_width = 1; // Ensure positive dimensions
-        if (scaled_height <= 0) scaled_height = 1;
-
-        // Calculate positions
-        float x_pos_render, y_pos_render;
-        
-        if (viewer.zoomed) {
-            // Calculate the un-zoomed position first
-            float unzoomed_width = current_display_view->texture->w * scale;
-            float unzoomed_height = current_display_view->texture->h * scale;
-            float unzoomed_x = (display_area_width - unzoomed_width) / 2.0f;
-            float unzoomed_y = (display_area_height - unzoomed_height) / 2.0f;
-
-            // Calculate the cursor position relative to the un-zoomed image
-            float cursor_relative_x = viewer.zoom_center_x - unzoomed_x;
-            float cursor_relative_y = viewer.zoom_center_y - unzoomed_y;
-
-            // Calculate the corresponding point in the zoomed image
-            float zoomed_point_x = cursor_relative_x * scale_multiplier;
-            float zoomed_point_y = cursor_relative_y * scale_multiplier;
-
-            // The new top-left corner is the cursor position minus the zoomed point
-            x_pos_render = viewer.zoom_center_x - zoomed_point_x;
-            y_pos_render = viewer.zoom_center_y - zoomed_point_y;
-
-            // Constrain vertical panning
-            if (scaled_height > display_area_height) {
-                float max_pan_y = -y_pos_render;
-                float min_pan_y = display_area_height - scaled_height - y_pos_render;
-                if (viewer.pan_offset_y > max_pan_y) {
-                    viewer.pan_offset_y = max_pan_y;
-                }
-                if (viewer.pan_offset_y < min_pan_y) {
-                    viewer.pan_offset_y = min_pan_y;
-                }
-            } else {
-                // If image is smaller than screen, no vertical panning needed
-                viewer.pan_offset_y = 0;
-            }
-
-            // Apply panning
-            x_pos_render += viewer.pan_offset_x;
-            y_pos_render += viewer.pan_offset_y;
-
-        } else {
-            // Normal mode: use pre-calculated positioning
-            x_pos_render = start_x;
-            y_pos_render = (display_area_height - scaled_height) / 2.0f; // Center vertically            
-        }
-
-        // Update overall content extents
-        if (x_pos_render < overall_content_start_x) {
-            overall_content_start_x = x_pos_render;
-        }
-        if (x_pos_render + scaled_width > overall_content_end_x) {
-            overall_content_end_x = x_pos_render + scaled_width;
-        }
-
-        SDL_FRect dest_rect = {x_pos_render, y_pos_render, scaled_width, scaled_height};
-        SDL_RenderTexture(viewer.renderer, current_display_view->texture, &current_display_view->crop_rect, &dest_rect);
-
-        SDL_Rect left_rect_gradient = {0, 0, (int)overall_content_start_x, (int)display_area_height};
-        if (left_rect_gradient.w > 0.5f) { // Use a small threshold for float comparison
-            render_horizontal_gradient_hsl(viewer.renderer, left_rect_gradient, current_display_view->left_edge_color, false);
-        }
-
-        SDL_Rect right_rect_gradient = {(int)overall_content_end_x, 0,
-                                    (int)(display_area_width - overall_content_end_x),
-                                    (int)display_area_height};
-        if (right_rect_gradient.w > 0.5f) {
-            render_horizontal_gradient_hsl(viewer.renderer, right_rect_gradient, current_display_view->right_edge_color, true);
-        }
-    }
-    
-    display_info();
-
-    // Render file browser overlay if active (after main content so it appears on top)
-    file_browser_render();
-
-    // Update screen
-    SDL_RenderPresent(viewer.renderer);
-}
-
-void display_info()
-{
-    // Only show progress indicator if we have more than one image
-    if (viewer.image_count <= 1) return;
-
-    // Check if we should display the progress indicator
-    Uint64 current_time = SDL_GetTicks();
-    Uint64 elapsed_time = current_time - viewer.last_page_change_time;
-    
-    // Only show progress indicator for 2 seconds (2000 ms) after a page change
-    if (elapsed_time <= 2000) {
-        // Calculate progress as a value between 0.0 and 1.0
-        int view_count = get_view_count();
-        float progress = (float)get_current_view() / (float)(view_count - 1);
-        
-        // Circle properties
-        int radius = 40;
-        int centerX = 100;  // Moved further from left edge
-        int centerY = 50;
-
-        // Draw the progress indicator
-        draw_progress_indicator(viewer.renderer, progress, centerX, centerY, radius); // Pass viewer.renderer
-                
-        // Display page number and total
-        char info_text[64];
-        snprintf(info_text, sizeof(info_text), "%d / %d %s", 
-                get_current_view() + 1, view_count,
-                options->enhancement_enabled ? "[E+]" : "[E-]");
-
-        SDL_Texture *text_texture = render_text(info_text, white);
-        if (text_texture) {
-            float text_width, text_height;
-            SDL_GetTextureSize(text_texture, &text_width, &text_height);
-            
-            // Ensure text doesn't get cut off on the left edge
-            float text_x = (float)(centerX - text_width / 2);
-            if (text_x < 10) {  // Minimum 10px margin from left edge
-                text_x = 10;
-            }
-            
-            SDL_FRect text_rect = {
-                text_x,
-                (float)(centerY + radius + 10),
-                (float)text_width,
-                (float)text_height
-            };
-            
-            SDL_RenderTexture(viewer.renderer, text_texture, NULL, &text_rect);
-            SDL_DestroyTexture(text_texture);
-        }
-    }
 }
 
 static void free_resources(void) {
@@ -1478,28 +1458,7 @@ static void toggle_fullscreen(void) {
     }
 }
 
-// Function to render text as a texture
-static SDL_Texture* render_text(const char *text, SDL_Color color) {
-    if (!viewer.font || !text) return NULL;
-
-    SDL_Surface *surface = TTF_RenderText_Blended(viewer.font, text, 0, color);
-    if (!surface) {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to render text: %s", SDL_GetError());
-        return NULL;
-    }
-
-    SDL_Texture *texture = SDL_CreateTextureFromSurface(viewer.renderer, surface);
-    SDL_DestroySurface(surface);
-
-    if (!texture) {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create texture from text: %s", SDL_GetError());
-    }
-
-    return texture;
-}
-
-// Public wrappers for file browser
-SDL_Texture* viewer_render_text(const char *text, SDL_Color color) { return render_text(text, color); }
+// Public helpers
 void viewer_init_view(ImageView *view) { init_view(view); }
 bool viewer_has_current_view(void) { return viewer.current_view_node != NULL; }
 
@@ -1542,6 +1501,13 @@ static void update_progress(float progress, const char *message) {
 }
 
 static void view_changed(ImageView *old_view_node, ImageView *new_view_node) {    
+
+    // if zoom is active, set zoom y to 0 on the next page
+    if (viewer.zoomed) {
+        viewer.zoom_center_y = 0;
+        viewer.pan_offset_y = 0;
+    }
+
     // Update the page change timer
     viewer.last_page_change_time = SDL_GetTicks();
     viewer.show_progress_indicator = true;
@@ -1583,14 +1549,16 @@ void next_view() {
     if (viewer.load_thread && SDL_GetThreadState(viewer.load_thread) == SDL_THREAD_ALIVE) {
         return;
     }
-
     ImageView *old_view_node = viewer.current_view_node;
     viewer.current_view_index++;
     view_changed(viewer.current_view_node, viewer.current_view_node->next);
 }
 
+/*
+ * Generate default views for the comic viewer.
+ */
 static void generate_default_views() {
-    // Clear any existing views
+    // Clear any existing views if needed
     free_all_views();
     
     viewer.view_count = 0;
