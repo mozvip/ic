@@ -160,7 +160,17 @@ bool pdf_get_image(ArchiveHandle *handle, int index, char **out_path) {
     // number of digits depends on total_images
     int num_digits = handle->total_images > 99 ? 3 : handle->total_images > 9 ? 2 : 1;
 
-    snprintf(expected_path, sizeof(expected_path), "%s-%0*d.jpg", output_prefix, num_digits, page_index + 1);
+     /* Build the numbered filename safely: format the number into a small buffer first,
+         then compose the final path to avoid %0*d format-truncation warnings. */
+     char numbuf[32];
+     snprintf(numbuf, sizeof(numbuf), "%0*d", num_digits, page_index + 1);
+    /* Compose expected_path safely to avoid format-truncation warnings. */
+    expected_path[0] = '\0';
+    strncpy(expected_path, output_prefix, sizeof(expected_path) - 1);
+    expected_path[sizeof(expected_path) - 1] = '\0';
+    strncat(expected_path, "-", sizeof(expected_path) - strlen(expected_path) - 1);
+    strncat(expected_path, numbuf, sizeof(expected_path) - strlen(expected_path) - 1);
+    strncat(expected_path, ".jpg", sizeof(expected_path) - strlen(expected_path) - 1);
 
     // Check if the file already exists
     if (access(expected_path, F_OK) == 0) {

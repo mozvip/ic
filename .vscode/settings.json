@@ -40,6 +40,11 @@
         "vector": "c",
         "sstream": "c",
         "regex": "c",
-        "tuple": "c"
+        "tuple": "c",
+        "stdlib.h": "c",
+        "edges.h": "c",
+        "upscale.h": "c",
+        "freeimage.h": "c",
+        "variant": "c"
     }
 }

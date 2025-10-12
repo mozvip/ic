@@ -63,14 +63,9 @@ void free_view_texture(ImageView *view) ;
 static ImageView* create_view_node_after(ImageView *prev_view);
 static void append_view(ImageView *view);
 static void free_all_views(void);
-static ImageView* get_view_by_index(int index);
 
 static int get_current_view(void) {
     return viewer.current_view_index;
-}
-
-static int get_view_count(void) {
-    return viewer.view_count;
 }
 
 static void remove_current_view(void) {
@@ -688,6 +683,10 @@ static void handle_events(void) {
                         // Toggle zoom/pan info overlay
                         viewer.show_zoom_pan_info = !viewer.show_zoom_pan_info;
                         break;
+                    case SDLK_DELETE:
+                        // Remove current view
+                        remove_current_view();
+                        break;
                     case SDLK_RETURN:
                     case SDLK_KP_ENTER:
                         // Apply crop if cropping mode, else toggle file browser
@@ -1128,7 +1127,6 @@ static int load_view_surfaces_in_thread(void *data) {
             }
         }
 
-        int width = FreeImage_GetWidth(image->bitmap);
         int height = FreeImage_GetHeight(image->bitmap);
 
         // disabled for now
@@ -1537,7 +1535,6 @@ void previous_view() {
         return;
     }    
 
-    ImageView *old_view_node = viewer.current_view_node;
     viewer.current_view_index--;
     view_changed(viewer.current_view_node, viewer.current_view_node->prev);
 }
@@ -1549,7 +1546,7 @@ void next_view() {
     if (viewer.load_thread && SDL_GetThreadState(viewer.load_thread) == SDL_THREAD_ALIVE) {
         return;
     }
-    ImageView *old_view_node = viewer.current_view_node;
+
     viewer.current_view_index++;
     view_changed(viewer.current_view_node, viewer.current_view_node->next);
 }
@@ -1641,14 +1638,4 @@ static void free_all_views(void) {
     viewer.first_view = NULL;
     viewer.current_view_node = NULL;
     viewer.view_count = 0;
-}
-
-static ImageView* get_view_by_index(int index) {
-    if (index < 0) return NULL;
-    
-    ImageView *current = viewer.first_view;
-    for (int i = 0; i < index && current; i++) {
-        current = current->next;
-    }
-    return current;
 }

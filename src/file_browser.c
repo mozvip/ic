@@ -105,8 +105,12 @@ static void fb_scan(void)
     {
         if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
             continue;
-        char full[PATH_MAX];
-        snprintf(full, sizeof(full), "%s/%s", fb.current_path, ent->d_name);
+    char full[PATH_MAX];
+    full[0] = '\0';
+    strncpy(full, fb.current_path, sizeof(full) - 1);
+    full[sizeof(full) - 1] = '\0';
+    strncat(full, "/", sizeof(full) - strlen(full) - 1);
+    strncat(full, ent->d_name, sizeof(full) - strlen(full) - 1);
         struct stat st;
         if (stat(full, &st) != 0)
             continue;
@@ -346,7 +350,11 @@ static void fb_activate_selected(void)
         return;
     }
     char full[PATH_MAX];
-    snprintf(full, sizeof(full), "%s/%s", fb.current_path, name);
+    full[0] = '\0';
+    strncpy(full, fb.current_path, sizeof(full) - 1);
+    full[sizeof(full) - 1] = '\0';
+    strncat(full, "/", sizeof(full) - strlen(full) - 1);
+    strncat(full, name, sizeof(full) - strlen(full) - 1);
     struct stat st;
     if (stat(full, &st) != 0)
         return;
@@ -471,8 +479,13 @@ void file_browser_render(void)
     float y = panel.y + 10;
     for (int i = start; i < end; i++)
     {
-        char line[PATH_MAX + 10];
-        snprintf(line, sizeof(line), "%c %s%s", (i == fb.selected ? '>' : ' '), fb.entries[i], fb.is_dir[i] ? "/" : "");
+    char line[PATH_MAX + 10];
+    line[0] = '\0';
+    line[0] = (i == fb.selected) ? '>' : ' ';
+    line[1] = ' ';
+    line[2] = '\0';
+    strncat(line, fb.entries[i], sizeof(line) - strlen(line) - 1);
+    if (fb.is_dir[i]) strncat(line, "/", sizeof(line) - strlen(line) - 1);
         SDL_Color color = {220, 220, 220, 255};
         if (fb.is_dir[i])
         {

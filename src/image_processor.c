@@ -108,6 +108,7 @@ void adjust_gamma_brightness_contrast(SDL_Surface* surface, double gamma, double
 
 void adjust_saturation(SDL_Surface* surface, double saturation) {
     // Stub: Saturation adjustment is complex and requires HSL/HSV conversion.
+    (void)saturation; // silence unused parameter warning for now
     if (!surface) return;
     
     
@@ -173,7 +174,7 @@ void auto_color_balance(SDL_Surface* surface) {
 void sharpen_image(SDL_Surface* surface, double amount) {
     if (!surface) return;
     // Stub: Sharpening requires convolution which is non-trivial.
-    
+    (void)amount; // silence unused parameter warning until implemented
 }
 
 void auto_enhance_image(SDL_Surface* surface, const ImageProcessingOptions* options) {
