@@ -8,6 +8,7 @@
 #include "image_processor.h"
 #include "progress_indicator.h"
 #include "file_browser.h"
+#include "overlay.h"
 
 extern struct ViewerState viewer;
 extern ImageProcessingOptions* options;
@@ -102,10 +103,21 @@ void viewer_display_info(void) {
         int centerY = 50;
         draw_progress_indicator(viewer.renderer, progress, centerX, centerY, radius);
 
-        char info_text[64];
-        snprintf(info_text, sizeof(info_text), "%d / %d %s",
+        const char* overlay_str = "GRAD";
+        if (viewer.overlay_mode == OVERLAY_STRETCHED) overlay_str = "STR";
+        else if (viewer.overlay_mode == OVERLAY_AMBILIGHT) overlay_str = "AMBI";
+
+        char info_text[128];
+        int w = 0, h = 0;
+        if (viewer.current_view_node && viewer.current_view_node->texture) {
+            w = (int)viewer.current_view_node->texture->w;
+            h = (int)viewer.current_view_node->texture->h;
+        }
+
+        snprintf(info_text, sizeof(info_text), "%d / %d %s [%s] (%dx%d)",
         viewer.current_view_index + 1, view_count,
-        options ? (options->enhancement_enabled ? "[E+]" : "[E-]") : "[E-]");
+        options ? (options->enhancement_enabled ? "[E+]" : "[E-]") : "[E-]",
+        overlay_str, w, h);
 
         SDL_Texture *text_texture = render_text_internal(info_text, (SDL_Color){255,255,255,255});
         if (text_texture) {
@@ -170,12 +182,13 @@ void viewer_display_info(void) {
 
 void viewer_render_current_view(void) {
     // full render implementation based on previous code in comic_viewer.c
-    SDL_SetRenderDrawColor(viewer.renderer, 0, 0, 0, 255);
+    SDL_SetRenderDrawColor(viewer.renderer, 30, 30, 30, 255);
     SDL_RenderClear(viewer.renderer);
 
     ImageView *current_display_view = viewer.current_view_node;
     if (!current_display_view || !current_display_view->texture) {
         viewer_display_info();
+        file_browser_render();
         SDL_RenderPresent(viewer.renderer);
         return;
     }
@@ -237,14 +250,18 @@ void viewer_render_current_view(void) {
     if (x_pos_render < overall_content_start_x) overall_content_start_x = x_pos_render;
     if (x_pos_render + scaled_width > overall_content_end_x) overall_content_end_x = x_pos_render + scaled_width;
 
+    // Render overlay using the new module
+    render_overlay(viewer.renderer, current_display_view, 
+                  display_area_width, display_area_height, 
+                  overall_content_start_x, overall_content_end_x);
+
+    // Now render the main image on top
     SDL_FRect dest_rect = { x_pos_render, y_pos_render, (float)scaled_width, (float)scaled_height };
+
+    // Apply the user-selected scale mode
+    SDL_SetTextureScaleMode(current_display_view->texture, viewer.scale_mode);
+
     SDL_RenderTexture(viewer.renderer, current_display_view->texture, &current_display_view->crop_rect, &dest_rect);
-
-    SDL_Rect left_rect_gradient = {0, 0, (int)overall_content_start_x, (int)display_area_height};
-    if (left_rect_gradient.w > 0) render_horizontal_gradient_hsl(viewer.renderer, left_rect_gradient, current_display_view->left_edge_color, false);
-
-    SDL_Rect right_rect_gradient = {(int)overall_content_end_x, 0, (int)(display_area_width - overall_content_end_x), (int)display_area_height};
-    if (right_rect_gradient.w > 0) render_horizontal_gradient_hsl(viewer.renderer, right_rect_gradient, current_display_view->right_edge_color, true);
 
     // Draw cropping overlay before info/file browser so guides are visible under UI
     viewer_render_cropping_overlay();

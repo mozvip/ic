@@ -8,7 +8,7 @@
             "name": "(gdb) Launch",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/bin/ic",
+            "program": "${workspaceFolder}/builddir/ic",
             "args": ["${workspaceFolder}/test/test.pdf"],
             "stopAtEntry": false,
             "cwd": "${fileDirname}",

@@ -44,19 +44,24 @@ IC (Image Comic Viewer) is a lightweight, fast comic book reader for Linux built
 2. Ensure you have the required development libraries:
    ```
    # For Debian/Ubuntu
-   sudo apt install libsdl3-dev libsdl3-image-dev libsdl3-ttf-dev
+   sudo apt install libsdl3-dev libsdl3-ttf-dev libzip-dev libfreeimage-dev
    
    # For Fedora
-   sudo dnf install SDL3-devel SDL3_image-devel SDL3_ttf-devel
+   sudo dnf install SDL3-devel SDL3_ttf-devel libzip-devel freeimage-devel
    
    # For Arch Linux
-   sudo pacman -S sdl3 sdl3_image sdl3_ttf
+   sudo pacman -S sdl3 sdl3_ttf libzip freeimage
    ```
 
 3. Build the project:
+   
    ```
-   make
+   meson setup builddir
+   meson compile -C builddir
+   # Binary will be in builddir/ic
    ```
+   
+   For more detailed Meson build instructions, see [MESON_BUILD.md](MESON_BUILD.md).
 
 ## Usage
 
@@ -78,6 +83,7 @@ Where `<comic-file-or-directory>` can be:
 - **First Page**: Home
 - **Last Page**: End
 - **Toggle Fullscreen**: F12 or F key
+- **Cycle Overlay Mode**: O key
 - **Exit Viewer**: Escape
 - **Navigate**: Mouse wheel scrolling
 

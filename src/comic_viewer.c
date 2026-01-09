@@ -43,7 +43,7 @@ static void view_changed(ImageView *old_view_node, ImageView *new_view_node);
 static bool select_monitor(int monitor_index, int *x, int *y);
 // Preload thread function and starter
 static int load_view_surfaces_in_thread(void *data);
-static void init_view(ImageView *view);
+static void load_view(ImageView *view);
 // Structure sent from worker thread to main thread when preload surfaces are ready
 typedef struct PreloadResult {
     ImageView *view;
@@ -226,6 +226,9 @@ bool comic_viewer_init(int monitor_index) {
     // Get the actual window size and drawable size for HiDPI scaling
     SDL_GetWindowSizeInPixels(viewer.window, &viewer.drawable_width, &viewer.drawable_height);
     SDL_GetWindowSize(viewer.window, &viewer.window_width, &viewer.window_height);
+
+    // Default scale mode
+    viewer.scale_mode = SDL_SCALEMODE_LINEAR;
     
     // Set logical size to handle HiDPI scaling automatically
     if (viewer.drawable_width > viewer.window_width || viewer.drawable_height > viewer.window_height) {
@@ -269,6 +272,9 @@ bool comic_viewer_init(int monitor_index) {
     viewer.last_page_change_time = 0;
     viewer.show_progress_indicator = false;
     viewer.show_zoom_pan_info = false;
+
+    // Initialize visual settings
+    viewer.overlay_mode = OVERLAY_STRETCHED;
 
     // Initialize zoom settings
     viewer.zoom_level = 1.0f;
@@ -462,22 +468,26 @@ void unload_view(ImageView *view) {
 }
 
 void comic_viewer_run(void) {
-    if (viewer.image_count == 0) {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "No images to display");
-        return;
-    }
-
     // get default image processing options
     options = get_default_processing_options();
 
-    // Load images for the current view
-    init_view(viewer.current_view_node);
-    // wait for first view to be loaded
-    SDL_WaitThread(viewer.load_thread, NULL);
-    // Async preload images for the next view if available
-    if (viewer.current_view_node->next) {
-        init_view(viewer.current_view_node->next);
+    if (viewer.image_count > 0) {
+        // Load images for the current view
+        load_view(viewer.current_view_node);
+        // wait for first view to be loaded
+        SDL_WaitThread(viewer.load_thread, NULL);
+        // Async preload images for the next view if available
+        if (viewer.current_view_node->next) {
+            load_view(viewer.current_view_node->next);
+        }
+    } else {
+        // No images loaded, ensure file browser is open
+        if (!file_browser_is_active()) {
+             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "No images to display and file browser not active");
+             return;
+        }
     }
+
     viewer.running = true;
 
     // Main loop
@@ -683,6 +693,14 @@ static void handle_events(void) {
                         // Toggle zoom/pan info overlay
                         viewer.show_zoom_pan_info = !viewer.show_zoom_pan_info;
                         break;
+                    case SDLK_S:
+                        // Toggle scaling mode (Linear <-> Nearest)
+                         if (viewer.scale_mode == SDL_SCALEMODE_LINEAR) {
+                            viewer.scale_mode = SDL_SCALEMODE_NEAREST;
+                        } else {
+                            viewer.scale_mode = SDL_SCALEMODE_LINEAR;
+                        }
+                        break;
                     case SDLK_DELETE:
                         // Remove current view
                         remove_current_view();
@@ -792,20 +810,34 @@ static void handle_events(void) {
                             // This view is already in single image mode
                             break;
                         }
+                        
+                        // Save the second image index before modifying the view
+                        int second_image_index = viewer.current_view_node->image_indices[1];
+                        
                         // the current view now has 1 image
                         viewer.current_view_node->count = 1;
+                        viewer.current_view_node->image_indices[1] = -1; // Clear unused index
 
                         // save link to the next view node
                         ImageView *backup_next_view = viewer.current_view_node->next;
                         // insert a new view node after the current one
-                        viewer.current_view_node->next = create_view_node_after(viewer.current_view_node);
-                        viewer.current_view_node->next->image_indices[0] = viewer.current_view_node->image_indices[1];
-                        viewer.current_view_node->next->next = backup_next_view;
-                        if (backup_next_view) {
-                            backup_next_view->prev = viewer.current_view_node->next;
+                        ImageView *new_view = create_view_node_after(viewer.current_view_node);
+                        if (!new_view) {
+                            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create new view node");
+                            break;
                         }
+                        new_view->count = 1;
+                        new_view->image_indices[0] = second_image_index;
+                        new_view->next = backup_next_view;
+                        new_view->prev = viewer.current_view_node;
+                        viewer.current_view_node->next = new_view;
+                        if (backup_next_view) {
+                            backup_next_view->prev = new_view;
+                        }
+                        viewer.view_count++;
+                        
                         unload_view(viewer.current_view_node);
-                        unload_view(viewer.current_view_node->next);
+                        unload_view(new_view);
                         view_changed(NULL, viewer.current_view_node);
 
                         break;
@@ -831,8 +863,13 @@ static void handle_events(void) {
                             if (old_next_view->next) {
                                 old_next_view->next->prev = viewer.current_view_node;
                             }
+                            viewer.view_count--;
+                            
                             unload_view(viewer.current_view_node);
-                            view_changed(old_next_view, viewer.current_view_node);
+                            view_changed(NULL, viewer.current_view_node);
+                            
+                            // Free the old next view
+                            free(old_next_view);
                         }
                         break;
                         
@@ -917,13 +954,26 @@ static void handle_events(void) {
                             viewer.zoom_level = 2.0f;
                         }
                         break;
+
+                    case SDLK_O:
+                        if (event.key.repeat) break;
+                        // Cycle overlay mode
+                        if (viewer.overlay_mode == OVERLAY_GRADIENT) {
+                            viewer.overlay_mode = OVERLAY_STRETCHED;
+                        } else if (viewer.overlay_mode == OVERLAY_STRETCHED) {
+                            viewer.overlay_mode = OVERLAY_AMBILIGHT;
+                        } else {
+                            viewer.overlay_mode = OVERLAY_GRADIENT;
+                        }
+                        viewer.last_page_change_time = SDL_GetTicks();
+                        break;
                         
                     case SDLK_E: // Toggle image enhancements
                         {
                             options->enhancement_enabled = !options->enhancement_enabled;
                             // Force reload of only the currently visible images to apply/remove enhancements
                             unload_view(viewer.current_view_node);
-                            init_view(viewer.current_view_node);
+                            load_view(viewer.current_view_node);
                         }
                         break;
 
@@ -943,7 +993,7 @@ static void handle_events(void) {
                                 if (options->contrast > 100) options->contrast = 100;
                             }
                             unload_view(viewer.current_view_node);
-                            init_view(viewer.current_view_node);
+                            load_view(viewer.current_view_node);
                         }
                         break;
 
@@ -958,7 +1008,7 @@ static void handle_events(void) {
                                 if (options->brightness > 100) options->brightness = 100;
                             }
                             unload_view(viewer.current_view_node);
-                            init_view(viewer.current_view_node);
+                            load_view(viewer.current_view_node);
                         }
                         break;
 
@@ -973,7 +1023,7 @@ static void handle_events(void) {
                                 if (options->gamma > 3.0) options->gamma = 3.0;
                             }
                             unload_view(viewer.current_view_node);
-                            init_view(viewer.current_view_node);
+                            load_view(viewer.current_view_node);
                         }
                         break;
                 }
@@ -1404,7 +1454,7 @@ static int load_view_surfaces_in_thread(void *data) {
 }
 
 // Start worker thread to decode surfaces for the given view
-static void init_view(ImageView *view) {
+static void load_view(ImageView *view) {
     if (view->texture) return; // already done
     if (viewer.load_thread && SDL_GetThreadState(viewer.load_thread) == SDL_THREAD_ALIVE) {
         // We are already loading
@@ -1457,7 +1507,7 @@ static void toggle_fullscreen(void) {
 }
 
 // Public helpers
-void viewer_init_view(ImageView *view) { init_view(view); }
+void viewer_init_view(ImageView *view) { load_view(view); }
 bool viewer_has_current_view(void) { return viewer.current_view_node != NULL; }
 
 // Function to select monitor and get its position
@@ -1510,13 +1560,13 @@ static void view_changed(ImageView *old_view_node, ImageView *new_view_node) {
     viewer.last_page_change_time = SDL_GetTicks();
     viewer.show_progress_indicator = true;
     if (!new_view_node->texture && viewer.load_thread == NULL) {
-        init_view(new_view_node);
+        load_view(new_view_node);
     }
 
     if (!old_view_node || old_view_node != new_view_node->next) {
         // if we didn't go back to the previous view, preload the next one
         if (new_view_node->next) {
-            init_view(new_view_node->next);
+            load_view(new_view_node->next);
         }
         // Unload old view images
         if (old_view_node) {

@@ -69,6 +69,13 @@ typedef struct ImageView {
 } ImageView;
 
 // Define the ViewerState struct
+// Overlay mode enumeration
+typedef enum {
+    OVERLAY_GRADIENT,
+    OVERLAY_STRETCHED,
+    OVERLAY_AMBILIGHT
+} OverlayMode;
+
 struct ViewerState {
     SourceType type;          // Type of source (CBZ, CBR, directory)
     char *source_path;        // Path to the source
@@ -91,6 +98,10 @@ struct ViewerState {
     Uint64 last_page_change_time;  // Time when the last page change occurred
     bool show_progress_indicator;  // Whether to show the progress indicator
     bool show_zoom_pan_info;       // Whether to show zoom/pan info overlay (toggled by 'i')
+
+    // Visual settings
+    OverlayMode overlay_mode;      // Rendering mode for empty space
+    SDL_ScaleMode scale_mode;      // Texture scaling mode (Linear/Nearest)
 
     // Multi-image display settings
     bool multiple_images_mode;     // Whether to display multiple images

@@ -1,3 +1,12 @@
-obj/
-bin/
 test/
+
+# Meson build directories
+builddir/
+builddir-*/
+meson-logs/
+meson-private/
+compile_commands.json
+.ninja_deps
+.ninja_log
+build.ninja
+rules.ninja

@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=IC
+GenericName=Image Comic Viewer
+Comment=A lightweight, fast comic book reader for Linux
+Exec=ic %f
+Icon=ic
+Terminal=false
+Categories=Graphics;Viewer;
+Keywords=previewer;comic;cbz;cbr;pdf;image;
+MimeType=application/vnd.comicbook+zip;application/vnd.comicbook-rar;application/pdf;inode/directory;
+startupNotify=true
