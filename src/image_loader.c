@@ -50,7 +50,7 @@ FIBITMAP *load_image_file(const char *filename) {
     }
     
     // Load the image
-    FIBITMAP *bitmap = FreeImage_Load(fif, filename, 0);
+    FIBITMAP *bitmap = FreeImage_Load(fif, filename, JPEG_ACCURATE | JPEG_EXIFROTATE);
     if (!bitmap) {
         fprintf(stderr, "Failed to load image: %s\n", filename);
         return NULL;
