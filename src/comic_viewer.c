@@ -25,6 +25,10 @@
 // Rendering module (viewer_display_info, viewer_render_current_view, viewer_render_text)
 #include "render.h"
 
+#ifdef IC_WITH_IMGUI
+#include "imgui_layer.h"
+#endif
+
 SDL_Color white = {255, 255, 255, 255}; // White
 
 struct ViewerState viewer; // Define the global viewer variable
@@ -216,6 +220,12 @@ bool comic_viewer_init(int monitor_index) {
         SDL_Quit();
         return false;
     }
+
+#ifdef IC_WITH_IMGUI
+    if (!imgui_layer_init(viewer.window, viewer.renderer)) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Warning: Failed to initialize ImGui overlay");
+    }
+#endif
     
     // Initialize the progress bar
     if (!progress_bar_init(viewer.renderer)) {
@@ -524,6 +534,10 @@ void comic_viewer_cleanup(void) {
         viewer.gamepad = NULL;
         viewer.gamepad_id = 0;
     }
+
+#ifdef IC_WITH_IMGUI
+    imgui_layer_shutdown();
+#endif
     
     free_resources();
     SDL_Quit();
@@ -565,6 +579,9 @@ static void handle_events(void) {
     SDL_Event event;
     
     while (SDL_PollEvent(&event)) {
+#ifdef IC_WITH_IMGUI
+        imgui_layer_process_event(&event);
+#endif
         switch (event.type) {
                 case SDL_EVENT_USER: {
                     // Handle surface loading completion events
@@ -588,6 +605,11 @@ static void handle_events(void) {
                 break;
 
             case SDL_EVENT_MOUSE_WHEEL:
+#ifdef IC_WITH_IMGUI
+                if (imgui_layer_is_visible() && imgui_layer_wants_capture_mouse()) {
+                    break;
+                }
+#endif
                 // Mouse wheel for page navigation
                 if (event.wheel.y > 0) {  // Scroll up
                     previous_view();
@@ -599,6 +621,11 @@ static void handle_events(void) {
             
 
             case SDL_EVENT_MOUSE_BUTTON_DOWN:
+#ifdef IC_WITH_IMGUI
+                if (imgui_layer_is_visible() && imgui_layer_wants_capture_mouse()) {
+                    break;
+                }
+#endif
                 if (event.button.button == SDL_BUTTON_LEFT) {
                     // Left mouse button pressed - toggle zoom
                     if (viewer.zoomed) {
@@ -625,6 +652,11 @@ static void handle_events(void) {
                 }
                 break;
             case SDL_EVENT_MOUSE_MOTION:
+#ifdef IC_WITH_IMGUI
+                if (imgui_layer_is_visible() && imgui_layer_wants_capture_mouse()) {
+                    break;
+                }
+#endif
                 // Update crop rectangle when dragging in cropping mode
                 if (viewer.cropping_mode && viewer.cropping_active) {
                     viewer.crop_current_x = event.motion.x;
@@ -632,6 +664,11 @@ static void handle_events(void) {
                 }
                 break;
             case SDL_EVENT_MOUSE_BUTTON_UP:
+#ifdef IC_WITH_IMGUI
+                if (imgui_layer_is_visible() && imgui_layer_wants_capture_mouse()) {
+                    break;
+                }
+#endif
                 if (viewer.cropping_mode && viewer.cropping_active && event.button.button == viewer.cropping_button) {
                     // Finish cropping
                     viewer.cropping_active = false;
@@ -681,6 +718,20 @@ static void handle_events(void) {
             break;
                 
             case SDL_EVENT_KEY_DOWN:
+#ifdef IC_WITH_IMGUI
+                if (event.key.key == SDLK_F1 || event.key.scancode == SDL_SCANCODE_F1) {
+                    if (!imgui_layer_is_initialized()) {
+                        snprintf(viewer.gamepad_status_msg, sizeof(viewer.gamepad_status_msg), "ImGui overlay unavailable");
+                        viewer.gamepad_status_until = SDL_GetTicks() + 2500;
+                    } else {
+                        bool new_visible = !imgui_layer_is_visible();
+                        imgui_layer_set_visible(new_visible);
+                        snprintf(viewer.gamepad_status_msg, sizeof(viewer.gamepad_status_msg), "ImGui overlay: %s", new_visible ? "ON" : "OFF");
+                        viewer.gamepad_status_until = SDL_GetTicks() + 1500;
+                    }
+                    break;
+                }
+#endif
                 // If file browser active, delegate keys first (except we allow ESC handled inside)
                 if (file_browser_is_active()) {
                     file_browser_handle_key(event.key.key);
@@ -688,6 +739,12 @@ static void handle_events(void) {
                         break;
                     }
                 }
+
+#ifdef IC_WITH_IMGUI
+                if (imgui_layer_is_visible() && imgui_layer_wants_capture_keyboard()) {
+                    break;
+                }
+#endif
                 switch (event.key.key) {
                     case SDLK_I:
                         // Toggle zoom/pan info overlay

@@ -10,6 +10,10 @@
 #include "file_browser.h"
 #include "overlay.h"
 
+#ifdef IC_WITH_IMGUI
+#include "imgui_layer.h"
+#endif
+
 extern struct ViewerState viewer;
 extern ImageProcessingOptions* options;
 static void draw_cropping_rect(SDL_FRect rect) {
@@ -185,10 +189,18 @@ void viewer_render_current_view(void) {
     SDL_SetRenderDrawColor(viewer.renderer, 30, 30, 30, 255);
     SDL_RenderClear(viewer.renderer);
 
+#ifdef IC_WITH_IMGUI
+    imgui_layer_new_frame();
+#endif
+
     ImageView *current_display_view = viewer.current_view_node;
     if (!current_display_view || !current_display_view->texture) {
         viewer_display_info();
         file_browser_render();
+
+#ifdef IC_WITH_IMGUI
+        imgui_layer_render();
+#endif
         SDL_RenderPresent(viewer.renderer);
         return;
     }
@@ -267,5 +279,9 @@ void viewer_render_current_view(void) {
     viewer_render_cropping_overlay();
     viewer_display_info();
     file_browser_render();
+
+#ifdef IC_WITH_IMGUI
+    imgui_layer_render();
+#endif
     SDL_RenderPresent(viewer.renderer);
 }
