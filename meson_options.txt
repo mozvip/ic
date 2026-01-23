@@ -1,0 +1,1 @@
+option('imgui', type: 'feature', value: 'disabled', description: 'Enable Dear ImGui UI overlay (requires a C++ compiler; fetched via Meson wrap)')

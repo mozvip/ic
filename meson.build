@@ -66,6 +66,20 @@ sources = files(
   'src/upscale.c',
 )
 
+# Optional Dear ImGui overlay (C++).
+imgui_opt = get_option('imgui')
+if imgui_opt.enabled()
+  add_languages('cpp', required: true, native: false)
+  add_project_arguments('-DIC_WITH_IMGUI', language: 'c')
+  add_project_arguments('-DIC_WITH_IMGUI', language: 'cpp')
+
+  imgui_sp = subproject('imgui', required: true)
+  imgui_dep = imgui_sp.get_variable('imgui_dep')
+
+  sources += files('src/imgui_layer.cpp')
+  dependencies += [imgui_dep]
+endif
+
 # Executable
 executable('ic',
   sources,

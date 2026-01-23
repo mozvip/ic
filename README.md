@@ -60,6 +60,16 @@ IC (Image Comic Viewer) is a lightweight, fast comic book reader for Linux built
    meson compile -C builddir
    # Binary will be in builddir/ic
    ```
+
+### Optional Dear ImGui overlay
+
+Build with an ImGui-based debug UI overlay (toggle in-app with `F1`):
+
+```bash
+meson setup builddir-imgui -Dimgui=enabled
+meson compile -C builddir-imgui
+./builddir-imgui/ic
+```
    
    For more detailed Meson build instructions, see [MESON_BUILD.md](MESON_BUILD.md).
 
