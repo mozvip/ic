@@ -14,6 +14,9 @@ project_description = 'Image Comic Viewer - A lightweight, fast comic book reade
 # Compiler setup
 cc = meson.get_compiler('c')
 
+# Dear ImGui overlay is always enabled (requires a C++ compiler).
+add_languages('cpp', required: true, native: false)
+
 # Add feature test macros for POSIX functions
 add_project_arguments('-D_POSIX_C_SOURCE=200809L', language: 'c')
 add_project_arguments('-D_DEFAULT_SOURCE', language: 'c')
@@ -64,21 +67,12 @@ sources = files(
   'src/progress_indicator.c',
   'src/render.c',
   'src/upscale.c',
+  'src/imgui_layer.cpp',
 )
 
-# Optional Dear ImGui overlay (C++).
-imgui_opt = get_option('imgui')
-if imgui_opt.enabled()
-  add_languages('cpp', required: true, native: false)
-  add_project_arguments('-DIC_WITH_IMGUI', language: 'c')
-  add_project_arguments('-DIC_WITH_IMGUI', language: 'cpp')
-
-  imgui_sp = subproject('imgui', required: true)
-  imgui_dep = imgui_sp.get_variable('imgui_dep')
-
-  sources += files('src/imgui_layer.cpp')
-  dependencies += [imgui_dep]
-endif
+imgui_sp = subproject('imgui', required: true)
+imgui_dep = imgui_sp.get_variable('imgui_dep')
+dependencies += [imgui_dep]
 
 # Executable
 executable('ic',

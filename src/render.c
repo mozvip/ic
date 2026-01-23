@@ -9,10 +9,7 @@
 #include "progress_indicator.h"
 #include "file_browser.h"
 #include "overlay.h"
-
-#ifdef IC_WITH_IMGUI
 #include "imgui_layer.h"
-#endif
 
 extern struct ViewerState viewer;
 extern ImageProcessingOptions* options;
@@ -135,35 +132,6 @@ void viewer_display_info(void) {
         }
     }
 
-    // Display zoom and pan variables if toggled on
-    if (viewer.show_zoom_pan_info) {
-        char zoom_info[64];
-        snprintf(zoom_info, sizeof(zoom_info), "Zoom center: (%.0f, %.0f) level: %.2f%s",
-                 viewer.zoom_center_x, viewer.zoom_center_y, viewer.zoom_level,
-                 viewer.zoomed ? " [ON]" : " [OFF]");
-        SDL_Texture *zoom_texture = render_text_internal(zoom_info, (SDL_Color){255,255,255,255});
-
-        char pan_info[64];
-        snprintf(pan_info, sizeof(pan_info), "Pan: (%.0f, %.0f) vel: (%.0f, %.0f)",
-                 viewer.pan_offset_x, viewer.pan_offset_y, viewer.pan_velocity_x, viewer.pan_velocity_y);
-        SDL_Texture *pan_texture = render_text_internal(pan_info, (SDL_Color){255,255,255,255});
-
-        if (zoom_texture) {
-            float zw, zh;
-            SDL_GetTextureSize(zoom_texture, &zw, &zh);
-            SDL_FRect zoom_rect = { 10.0f, 10.0f, zw, zh };
-            SDL_RenderTexture(viewer.renderer, zoom_texture, NULL, &zoom_rect);
-            SDL_DestroyTexture(zoom_texture);
-        }
-        if (pan_texture) {
-            float pw, ph;
-            SDL_GetTextureSize(pan_texture, &pw, &ph);
-            SDL_FRect pan_rect = { 10.0f, 30.0f, pw, ph };
-            SDL_RenderTexture(viewer.renderer, pan_texture, NULL, &pan_rect);
-            SDL_DestroyTexture(pan_texture);
-        }
-    }
-
     // Show transient gamepad status messages (if set and not expired)
     if (viewer.gamepad_status_msg[0] != '\0') {
         Uint64 now = SDL_GetTicks();
@@ -189,18 +157,14 @@ void viewer_render_current_view(void) {
     SDL_SetRenderDrawColor(viewer.renderer, 30, 30, 30, 255);
     SDL_RenderClear(viewer.renderer);
 
-#ifdef IC_WITH_IMGUI
     imgui_layer_new_frame();
-#endif
 
     ImageView *current_display_view = viewer.current_view_node;
     if (!current_display_view || !current_display_view->texture) {
         viewer_display_info();
         file_browser_render();
 
-#ifdef IC_WITH_IMGUI
         imgui_layer_render();
-#endif
         SDL_RenderPresent(viewer.renderer);
         return;
     }
@@ -280,8 +244,6 @@ void viewer_render_current_view(void) {
     viewer_display_info();
     file_browser_render();
 
-#ifdef IC_WITH_IMGUI
     imgui_layer_render();
-#endif
     SDL_RenderPresent(viewer.renderer);
 }

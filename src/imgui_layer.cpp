@@ -2,6 +2,8 @@
 
 #include <SDL3/SDL.h>
 
+#include "comic_viewer.h"
+
 #include "imgui.h"
 #include "backends/imgui_impl_sdl3.h"
 #include "backends/imgui_impl_sdlrenderer3.h"
@@ -75,7 +77,7 @@ void imgui_layer_new_frame(void) {
 static void imgui_layer_build_ui(void) {
     if (!g_imgui_visible) return;
 
-    ImGui::SetNextWindowSize(ImVec2(420.0f, 220.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(460.0f, 300.0f), ImGuiCond_FirstUseEver);
     if (ImGui::Begin("ic", &g_imgui_visible)) {
         ImGui::TextUnformatted("Dear ImGui overlay (F1 to toggle)");
         ImGui::Separator();
@@ -90,7 +92,13 @@ static void imgui_layer_build_ui(void) {
         ImGui::Text("Drawable: %dx%d", pix_w, pix_h);
 
         ImGui::Spacing();
-        ImGui::TextUnformatted("This is a minimal integration point; add controls as needed.");
+
+        ImGui::SeparatorText("Zoom / Pan");
+        ImGui::Text("Zoomed: %s", viewer.zoomed ? "ON" : "OFF");
+        ImGui::Text("Zoom center: (%.0f, %.0f)", viewer.zoom_center_x, viewer.zoom_center_y);
+        ImGui::Text("Zoom level: %.2f", viewer.zoom_level);
+        ImGui::Text("Pan offset: (%.0f, %.0f)", viewer.pan_offset_x, viewer.pan_offset_y);
+        ImGui::Text("Pan velocity: (%.0f, %.0f)", viewer.pan_velocity_x, viewer.pan_velocity_y);
     }
     ImGui::End();
 }
