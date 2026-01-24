@@ -83,6 +83,8 @@ static void imgui_layer_build_ui(void) {
         ImGui::Separator();
         ImGui::Text("Renderer: %s", SDL_GetRendererName(g_renderer));
 
+        ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
+
         int win_w = 0, win_h = 0;
         SDL_GetWindowSize(g_window, &win_w, &win_h);
         ImGui::Text("Window: %dx%d", win_w, win_h);
@@ -92,6 +94,19 @@ static void imgui_layer_build_ui(void) {
         ImGui::Text("Drawable: %dx%d", pix_w, pix_h);
 
         ImGui::Spacing();
+
+        ImGui::SeparatorText("Visual");
+        {
+            static const char *overlay_items[] = {"Gradient", "Stretched", "Ambilight"};
+            int overlay_index = (int)viewer.overlay_mode;
+            if (overlay_index < 0) overlay_index = 0;
+            if (overlay_index > 2) overlay_index = 2;
+
+            if (ImGui::Combo("Overlay Mode", &overlay_index, overlay_items, IM_ARRAYSIZE(overlay_items))) {
+                viewer.overlay_mode = (OverlayMode)overlay_index;
+                viewer.last_page_change_time = SDL_GetTicks();
+            }
+        }
 
         ImGui::SeparatorText("Zoom / Pan");
         ImGui::Text("Zoomed: %s", viewer.zoomed ? "ON" : "OFF");
