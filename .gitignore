@@ -11,3 +11,4 @@ compile_commands.json
 build.ninja
 rules.ninja
 temp_extract
+.idea/

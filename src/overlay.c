@@ -65,8 +65,8 @@ static SDL_Color compute_average_color(SDL_Surface *surface, int x, int y, int w
     return result;
 }
 
-static void render_vertical_gradient(SDL_Renderer *renderer, SDL_FRect rect, SDL_Color top_c, SDL_Color bottom_c) {
-    float alpha = 100.0f / 255.0f;
+static void render_vertical_gradient(SDL_Renderer *renderer, const SDL_FRect rect, const SDL_Color top_c, const SDL_Color bottom_c) {
+    const float alpha = 100.0f / 255.0f;
     
     SDL_Vertex vertices[4] = {
         {{rect.x, rect.y}, {top_c.r/255.0f, top_c.g/255.0f, top_c.b/255.0f, alpha}, {0.0f, 0.0f}},
@@ -75,7 +75,7 @@ static void render_vertical_gradient(SDL_Renderer *renderer, SDL_FRect rect, SDL
         {{rect.x, rect.y + rect.h}, {bottom_c.r/255.0f, bottom_c.g/255.0f, bottom_c.b/255.0f, alpha}, {0.0f, 1.0f}}
     };
 
-    int indices[] = {0, 1, 2, 0, 2, 3};
+    const int indices[] = {0, 1, 2, 0, 2, 3};
     SDL_RenderGeometry(renderer, NULL, vertices, 4, indices, 6);
 }
 
@@ -105,7 +105,7 @@ void render_overlay(SDL_Renderer *renderer, ImageView *view,
         // Ambilight effect: 24 averaged colors per side
         
         if (view->surface) {
-            int samples = 24;
+            const int samples = 24;
             float sample_height = view->crop_rect.h / (float)samples;
             float render_step_y = display_height / (float)samples;
             
@@ -132,7 +132,7 @@ void render_overlay(SDL_Renderer *renderer, ImageView *view,
                     render_vertical_gradient(renderer, rect, colors[i], colors[i+1]);
                 }
 
-                float last_y = ((samples - 1) * render_step_y) + (render_step_y / 2.0f);
+                const float last_y = ((samples - 1) * render_step_y) + (render_step_y / 2.0f);
                 rect.y = last_y;
                 rect.h = display_height - last_y;
                 render_vertical_gradient(renderer, rect, colors[samples-1], colors[samples-1]);
@@ -159,7 +159,7 @@ void render_overlay(SDL_Renderer *renderer, ImageView *view,
                     render_vertical_gradient(renderer, rect, colors[i], colors[i+1]);
                 }
 
-                float last_y = ((samples - 1) * render_step_y) + (render_step_y / 2.0f);
+                const float last_y = ((samples - 1) * render_step_y) + (render_step_y / 2.0f);
                 rect.y = last_y;
                 rect.h = display_height - last_y;
                 render_vertical_gradient(renderer, rect, colors[samples-1], colors[samples-1]);

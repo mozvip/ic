@@ -1,5 +1,6 @@
 #include "imgui_layer.h"
 
+#include <cstring>
 #include <SDL3/SDL.h>
 
 #include "comic_viewer.h"
@@ -12,6 +13,9 @@ static bool g_imgui_initialized = false;
 static bool g_imgui_visible = false;
 static SDL_Window *g_window = nullptr;
 static SDL_Renderer *g_renderer = nullptr;
+static char g_status_message[256] = {0};
+static Uint64 g_status_message_time = 0;   // Timestamp when the message was set
+static Uint64 g_status_message_duration = 5000; // Auto-dismiss after 5 seconds
 
 bool imgui_layer_init(SDL_Window *window, SDL_Renderer *renderer) {
     if (g_imgui_initialized) return true;
@@ -75,6 +79,59 @@ void imgui_layer_new_frame(void) {
 }
 
 static void imgui_layer_build_ui(void) {
+    // Always render the status message overlay if set (regardless of visibility toggle)
+    if (g_status_message[0] != '\0') {
+        // Auto-dismiss after duration
+        Uint64 elapsed = SDL_GetTicks() - g_status_message_time;
+        float alpha = 1.0f;
+        if (elapsed > g_status_message_duration) {
+            g_status_message[0] = '\0';
+        } else {
+            // Fade out during the last second
+            if (elapsed > g_status_message_duration - 1000) {
+                alpha = (float)(g_status_message_duration - elapsed) / 1000.0f;
+            }
+
+            ImGuiIO &io = ImGui::GetIO();
+            ImVec2 display_size = io.DisplaySize;
+
+            // Center the window on screen
+            ImGui::SetNextWindowPos(ImVec2(display_size.x * 0.5f, display_size.y * 0.5f),
+                                    ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+            ImGui::SetNextWindowSize(ImVec2(0.0f, 0.0f)); // Auto-size
+
+            ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar |
+                                     ImGuiWindowFlags_NoResize |
+                                     ImGuiWindowFlags_NoMove |
+                                     ImGuiWindowFlags_NoScrollbar |
+                                     ImGuiWindowFlags_NoCollapse |
+                                     ImGuiWindowFlags_AlwaysAutoResize |
+                                     ImGuiWindowFlags_NoSavedSettings |
+                                     ImGuiWindowFlags_NoFocusOnAppearing |
+                                     ImGuiWindowFlags_NoNav |
+                                     ImGuiWindowFlags_NoInputs;
+
+            // Semi-transparent background with fade
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(30.0f, 20.0f));
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.0f);
+            ImGui::PushStyleVar(ImGuiStyleVar_Alpha, alpha);
+            ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.15f, 0.15f, 0.15f, 0.9f));
+
+            if (ImGui::Begin("##StatusMessage", nullptr, flags)) {
+                // Icon-like prefix
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.8f, 0.2f, 1.0f));
+                ImGui::TextUnformatted("!");
+                ImGui::PopStyleColor();
+                ImGui::SameLine();
+                ImGui::TextUnformatted(g_status_message);
+            }
+            ImGui::End();
+
+            ImGui::PopStyleColor();
+            ImGui::PopStyleVar(3);
+        }
+    }
+
     if (!g_imgui_visible) return;
 
     ImGui::SetNextWindowSize(ImVec2(460.0f, 300.0f), ImGuiCond_FirstUseEver);
@@ -145,4 +202,14 @@ bool imgui_layer_wants_capture_mouse(void) {
     if (!g_imgui_initialized) return false;
     const ImGuiIO &io = ImGui::GetIO();
     return io.WantCaptureMouse;
+}
+
+void imgui_layer_set_status_message(const char *message) {
+    if (message) {
+        strncpy(g_status_message, message, sizeof(g_status_message) - 1);
+        g_status_message[sizeof(g_status_message) - 1] = '\0';
+        g_status_message_time = SDL_GetTicks();
+    } else {
+        g_status_message[0] = '\0';
+    }
 }

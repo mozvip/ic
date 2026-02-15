@@ -144,6 +144,9 @@ struct ViewerState {
     SDL_JoystickID gamepad_id;     // ID of the opened gamepad
     char gamepad_status_msg[128];  // Short status message to display (e.g. "Gamepad connected")
     Uint64 gamepad_status_until;   // Timestamp in ms until which the status should be shown
+
+    // Status/error message displayed via ImGui (e.g. "No images found")
+    char status_message[256];
 };
 
 // Declare viewer as an extern variable of this struct type

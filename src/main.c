@@ -9,6 +9,7 @@
 #include "comic_viewer.h"
 #include "comic_loaders.h"
 #include "file_browser.h"
+#include "imgui_layer.h"
 
 void print_usage(const char *program_name) {
     printf("Usage: %s [options] <file_or_directory>\n", program_name);
@@ -85,8 +86,12 @@ int main(int argc, char *argv[]) {
             // Run the main loop
             comic_viewer_run();
         } else {
-            fprintf(stderr, "Failed to load: %s\n", path);
-            return_value = 1;
+            // Loading failed — show the status message and open the file browser
+            if (viewer.status_message[0] != '\0') {
+                imgui_layer_set_status_message(viewer.status_message);
+            }
+            file_browser_open(path);
+            comic_viewer_run();
         }
     } else {
         // No path provided, start in file browser mode

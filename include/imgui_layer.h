@@ -22,6 +22,8 @@ bool imgui_layer_is_visible(void);
 bool imgui_layer_wants_capture_keyboard(void);
 bool imgui_layer_wants_capture_mouse(void);
 
+void imgui_layer_set_status_message(const char *message);
+
 #ifdef __cplusplus
 }
 #endif

@@ -465,6 +465,9 @@ bool comic_viewer_load(const char *path) {
     }
 
     if (result) {
+        // Clear any previous status message
+        viewer.status_message[0] = '\0';
+        imgui_layer_set_status_message(NULL);
         // generate default views
         generate_default_views();
         // Update window title to reflect loaded source filename (not full path)
@@ -492,6 +495,8 @@ bool comic_viewer_load(const char *path) {
         update_progress(1.0f, "Could not load input");
         // If we couldn't load the archive, check if it's a directory
         if (viewer.type == SOURCE_DIRECTORY) {
+            snprintf(viewer.status_message, sizeof(viewer.status_message),
+                     "No images found in folder: %s", path);
             free(viewer.source_path);
             viewer.source_path = NULL;
         }
@@ -1077,7 +1082,13 @@ static void handle_events(void) {
                         break;
 
                     case SDLK_B:
-                        {
+                        if (viewer.image_count == 0) {
+                            // No images loaded — open the file browser
+                            if (!file_browser_is_active()) {
+                                file_browser_open(viewer.source_path);
+                                imgui_layer_set_status_message(NULL);
+                            }
+                        } else {
                             options->enhancement_enabled = true;
                             if (event.key.mod & SDL_KMOD_SHIFT) {
                                 options->brightness -= 5;
