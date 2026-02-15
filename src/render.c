@@ -175,8 +175,22 @@ void viewer_render_current_view(void) {
     float overall_content_start_x = display_area_width;
     float overall_content_end_x = 0.0f;
 
-    float scale_height = display_area_height / current_display_view->texture->h;
-    float scale_width = display_area_width / current_display_view->texture->w;
+    // Use crop_rect dimensions as the effective source size to preserve aspect ratio.
+    // When crop_rect is set (non-zero), it defines the actual visible region which may
+    // differ from the full texture dimensions (e.g. after auto-crop trims white borders).
+    SDL_FRect *src_rect = NULL;
+    float src_w, src_h;
+    if (current_display_view->crop_rect.w > 0 && current_display_view->crop_rect.h > 0) {
+        src_rect = &current_display_view->crop_rect;
+        src_w = current_display_view->crop_rect.w;
+        src_h = current_display_view->crop_rect.h;
+    } else {
+        src_w = (float)current_display_view->texture->w;
+        src_h = (float)current_display_view->texture->h;
+    }
+
+    float scale_height = display_area_height / src_h;
+    float scale_width = display_area_width / src_w;
     float scale = fminf(scale_height, scale_width);
 
     float final_scale = scale;
@@ -184,17 +198,17 @@ void viewer_render_current_view(void) {
 
     if (final_scale <= 1e-6f) final_scale = 1e-6f;
 
-    int scaled_width = (int)(current_display_view->texture->w * final_scale);
-    int scaled_height = (int)(current_display_view->texture->h * final_scale);
+    int scaled_width = (int)(src_w * final_scale);
+    int scaled_height = (int)(src_h * final_scale);
     if (scaled_width <= 0) scaled_width = 1;
     if (scaled_height <= 0) scaled_height = 1;
 
-    float start_x = (display_area_width - (current_display_view->texture->w * scale)) / 2.0f;
+    float start_x = (display_area_width - (src_w * scale)) / 2.0f;
 
     float x_pos_render, y_pos_render;
     if (viewer.zoomed) {
-        float unzoomed_width = current_display_view->texture->w * scale;
-        float unzoomed_height = current_display_view->texture->h * scale;
+        float unzoomed_width = src_w * scale;
+        float unzoomed_height = src_h * scale;
         float unzoomed_x = (display_area_width - unzoomed_width) / 2.0f;
         float unzoomed_y = (display_area_height - unzoomed_height) / 2.0f;
 
@@ -237,7 +251,7 @@ void viewer_render_current_view(void) {
     // Apply the user-selected scale mode
     SDL_SetTextureScaleMode(current_display_view->texture, viewer.scale_mode);
 
-    SDL_RenderTexture(viewer.renderer, current_display_view->texture, &current_display_view->crop_rect, &dest_rect);
+    SDL_RenderTexture(viewer.renderer, current_display_view->texture, src_rect, &dest_rect);
 
     // Draw cropping overlay before info/file browser so guides are visible under UI
     viewer_render_cropping_overlay();
