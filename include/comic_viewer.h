@@ -34,6 +34,13 @@ typedef enum {
     SOURCE_PDF        // PDF document
 } SourceType;
 
+// PDF rendering backend selection
+typedef enum {
+    PDF_BACKEND_POPPLER = 0,   // poppler-utils CLI (pdftoppm/pdfinfo)
+    PDF_BACKEND_MUPDF   = 1,   // MuPDF C library
+    PDF_BACKEND_COUNT
+} PdfBackendType;
+
 // Archive handle for on-demand loading
 typedef enum {
     ARCHIVE_TYPE_NONE,
@@ -147,6 +154,9 @@ struct ViewerState {
 
     // Status/error message displayed via ImGui (e.g. "No images found")
     char status_message[256];
+
+    // PDF rendering backend
+    PdfBackendType pdf_backend;  // Currently selected PDF backend
 };
 
 // Declare viewer as an extern variable of this struct type

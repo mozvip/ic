@@ -32,6 +32,13 @@ if not freeimage_dep.found()
   freeimage_dep = cc.find_library('freeimage', required: true)
 endif
 
+# MuPDF (optional – enables the MuPDF PDF rendering backend)
+mupdf_dep = dependency('mupdf', required: false)
+if not mupdf_dep.found()
+  mupdf_dep = cc.find_library('mupdf', required: false)
+endif
+mupdf_third_dep = cc.find_library('mupdf-third', required: false)
+
 m_dep = cc.find_library('m', required: true)
 
 # Collect all dependencies
@@ -43,6 +50,14 @@ dependencies = [
   m_dep,
 ]
 
+if mupdf_dep.found()
+  add_project_arguments('-DHAVE_MUPDF', language: ['c', 'cpp'])
+  dependencies += [mupdf_dep]
+  if mupdf_third_dep.found()
+    dependencies += [mupdf_third_dep]
+  endif
+endif
+
 # Include directories
 inc_dirs = include_directories('include')
 
@@ -53,6 +68,8 @@ sources = files(
   'src/comic_loaders_cbz.c',
   'src/comic_loaders_dir.c',
   'src/comic_loaders_pdf.c',
+  'src/comic_loaders_pdf_poppler.c',
+  'src/comic_loaders_pdf_mupdf.c',
   'src/comic_loaders_utils.c',
   'src/comic_loaders.c',
   'src/comic_viewer.c',
@@ -112,4 +129,5 @@ summary({
   'SDL3_ttf': sdl3_ttf_dep.found(),
   'libzip': libzip_dep.found(),
   'FreeImage': freeimage_dep.found(),
+  'MuPDF': mupdf_dep.found(),
 }, section: 'Dependencies', bool_yn: true)

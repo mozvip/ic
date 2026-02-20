@@ -1,9 +1,11 @@
 #include "imgui_layer.h"
 
+#include <cstdio>
 #include <cstring>
 #include <SDL3/SDL.h>
 
 #include "comic_viewer.h"
+#include "pdf_backend.h"
 
 #include "imgui.h"
 #include "backends/imgui_impl_sdl3.h"
@@ -162,6 +164,34 @@ static void imgui_layer_build_ui(void) {
             if (ImGui::Combo("Overlay Mode", &overlay_index, overlay_items, IM_ARRAYSIZE(overlay_items))) {
                 viewer.overlay_mode = (OverlayMode)overlay_index;
                 viewer.last_page_change_time = SDL_GetTicks();
+            }
+        }
+
+        ImGui::SeparatorText("PDF Backend");
+        {
+            int backend_count = pdf_backend_get_count();
+            int current = (int)viewer.pdf_backend;
+            if (current < 0 || current >= backend_count) current = 0;
+
+            // Build labels with availability info
+            const char *labels[PDF_BACKEND_COUNT];
+            static char label_bufs[PDF_BACKEND_COUNT][64];
+            for (int i = 0; i < backend_count && i < PDF_BACKEND_COUNT; i++) {
+                bool avail = pdf_backend_is_available(i);
+                snprintf(label_bufs[i], sizeof(label_bufs[i]), "%s%s",
+                         pdf_backend_get_name(i), avail ? "" : " [unavailable]");
+                labels[i] = label_bufs[i];
+            }
+
+            if (ImGui::Combo("PDF Renderer", &current, labels, backend_count)) {
+                if (pdf_backend_is_available(current)) {
+                    viewer.pdf_backend = (PdfBackendType)current;
+                }
+            }
+
+            if (viewer.type == SOURCE_PDF) {
+                ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
+                    "Reopen the file to apply a new backend");
             }
         }
 

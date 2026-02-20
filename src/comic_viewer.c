@@ -273,6 +273,9 @@ bool comic_viewer_init(int monitor_index) {
     // Initialize visual settings
     viewer.overlay_mode = OVERLAY_STRETCHED;
 
+    // Initialize PDF backend (default to MuPDF)
+    viewer.pdf_backend = PDF_BACKEND_MUPDF;
+
     // Initialize zoom settings
     viewer.zoom_level = 1.0f;
     viewer.zoomed = false;
