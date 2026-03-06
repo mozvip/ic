@@ -2,7 +2,6 @@
 #define IMAGE_PROCESSOR_H
 
 #include <SDL3/SDL.h>
-#include <FreeImage.h>
 #include <stdbool.h>
 
 // Color correction options

@@ -3,10 +3,15 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if defined(HAVE_FREEIMAGE)
+#include <FreeImage.h>
+#endif
+
 extern struct ViewerState viewer;
 
 static const void * get_clipboard_data(void *userdata, const char *mime_type, size_t *size) {
     if (strcmp(mime_type, "image/png") == 0) {
+#if defined(HAVE_FREEIMAGE)
         ImageView *image_view = (ImageView *)userdata;
         if (!image_view) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "No image view available for clipboard data\n");
@@ -66,6 +71,13 @@ static const void * get_clipboard_data(void *userdata, const char *mime_type, si
         }   
         FreeImage_CloseMemory(mem);
         return NULL;
+    #else
+        (void)userdata;
+        (void)size;
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                "Clipboard image copy requires FreeImage support at build time");
+        return NULL;
+    #endif
 
     }
 
@@ -86,5 +98,7 @@ void copy_current_view_to_clipboard(void) {
     mime_types[0] = strdup("image/png");
     int num_mime_types = 1;
 
-    SDL_SetClipboardData(get_clipboard_data, cleanup_clipboard_data, view, mime_types, num_mime_types);
+    if (!SDL_SetClipboardData(get_clipboard_data, cleanup_clipboard_data, view, mime_types, num_mime_types)) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Failed to set clipboard image data: %s", SDL_GetError());
+    }
 }

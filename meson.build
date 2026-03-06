@@ -23,13 +23,28 @@ add_project_arguments('-D_DEFAULT_SOURCE', language: 'c')
 
 # Dependencies
 sdl3_dep = dependency('sdl3', required: true)
+sdl3_image_dep = dependency('SDL3_image', required: false)
 sdl3_ttf_dep = dependency('SDL3_ttf', required: true)
 libzip_dep = dependency('libzip', required: true)
 
-# FreeImage may not have pkg-config, try to find it as a library
+# Optional image backends
 freeimage_dep = dependency('freeimage', required: false)
 if not freeimage_dep.found()
-  freeimage_dep = cc.find_library('freeimage', required: true)
+  freeimage_dep = cc.find_library('freeimage', required: false)
+endif
+
+image_backend_opt = get_option('image_backend')
+
+if image_backend_opt == 'freeimage' and not freeimage_dep.found()
+  error('image_backend=freeimage requested but FreeImage was not found')
+endif
+
+if image_backend_opt == 'sdl_image' and not sdl3_image_dep.found()
+  error('image_backend=sdl_image requested but SDL3_image was not found')
+endif
+
+if image_backend_opt == 'auto' and not freeimage_dep.found() and not sdl3_image_dep.found()
+  error('No image backend found. Install FreeImage and/or SDL3_image')
 endif
 
 # MuPDF (optional – enables the MuPDF PDF rendering backend)
@@ -46,9 +61,18 @@ dependencies = [
   sdl3_dep,
   sdl3_ttf_dep,
   libzip_dep,
-  freeimage_dep,
   m_dep,
 ]
+
+if freeimage_dep.found()
+  add_project_arguments('-DHAVE_FREEIMAGE', language: ['c', 'cpp'])
+  dependencies += [freeimage_dep]
+endif
+
+if sdl3_image_dep.found()
+  add_project_arguments('-DHAVE_SDL_IMAGE3', language: ['c', 'cpp'])
+  dependencies += [sdl3_image_dep]
+endif
 
 if mupdf_dep.found()
   add_project_arguments('-DHAVE_MUPDF', language: ['c', 'cpp'])
@@ -126,8 +150,10 @@ summary({
 
 summary({
   'SDL3': sdl3_dep.found(),
+  'SDL3_image': sdl3_image_dep.found(),
   'SDL3_ttf': sdl3_ttf_dep.found(),
   'libzip': libzip_dep.found(),
   'FreeImage': freeimage_dep.found(),
+  'Image backend option': image_backend_opt,
   'MuPDF': mupdf_dep.found(),
 }, section: 'Dependencies', bool_yn: true)

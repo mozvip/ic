@@ -261,11 +261,6 @@ static void fb_unload_current_comic(void)
         }
         free(viewer.images[i].path);
         viewer.images[i].path = NULL;
-        if (viewer.images[i].bitmap)
-        {
-            FreeImage_Unload(viewer.images[i].bitmap);
-            viewer.images[i].bitmap = NULL;
-        }
     }
     ImageView *v = viewer.first_view;
     while (v)

@@ -161,6 +161,33 @@ void viewer_render_current_view(void) {
 
     ImageView *current_display_view = viewer.current_view_node;
     if (!current_display_view || !current_display_view->texture) {
+        // Page is loading or empty - show loading indicator
+        if (current_display_view && viewer.load_thread && SDL_GetThreadState(viewer.load_thread) == SDL_THREAD_ALIVE) {
+            // Page is actively loading - show spinner
+            int centerX = (int)((float)viewer.drawable_width / 2.0f);
+            int centerY = (int)((float)viewer.drawable_height / 2.0f);
+            int radius = 30;
+            
+            // Animate the spinner based on time
+            Uint64 elapsed = SDL_GetTicks() - viewer.last_page_change_time;
+            float progress = fmodf((float)elapsed / 800.0f, 1.0f); // Full rotation every 800ms
+            draw_progress_indicator(viewer.renderer, progress, centerX, centerY, radius);
+            
+            // Show "Loading..." text below the spinner
+            SDL_Texture *loading_text = render_text_internal("Loading page...", (SDL_Color){200,200,200,255});
+            if (loading_text) {
+                float w, h;
+                SDL_GetTextureSize(loading_text, &w, &h);
+                SDL_FRect text_rect = { 
+                    (float)centerX - w / 2.0f, 
+                    (float)centerY + radius + 20.0f, 
+                    w, h 
+                };
+                SDL_RenderTexture(viewer.renderer, loading_text, NULL, &text_rect);
+                SDL_DestroyTexture(loading_text);
+            }
+        }
+        
         viewer_display_info();
         file_browser_render();
 
@@ -261,3 +288,4 @@ void viewer_render_current_view(void) {
     imgui_layer_render();
     SDL_RenderPresent(viewer.renderer);
 }
+

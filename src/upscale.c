@@ -19,7 +19,7 @@ static const char* pick_exe(const char* exe_path) {
     return "realesrgan-ncnn-vulkan"; // must be in PATH
 }
 
-FIBITMAP* upscale(const char* input_path, int scale, const char* model, const char* exe_path) {
+SDL_Surface* upscale(const char* input_path, int scale, const char* model, const char* exe_path) {
     if (!input_path || !*input_path) return NULL;
     if (scale <= 0) scale = 4;
     if (!model || !*model) model = "realesrgan-x4plus";
@@ -49,13 +49,13 @@ FIBITMAP* upscale(const char* input_path, int scale, const char* model, const ch
     }
 
     // Load resulting image
-    FIBITMAP *bitmap = load_image_file(out_path);
-    if (!bitmap) {
+    SDL_Surface *surface = image_load_surface(out_path, NULL);
+    if (!surface) {
         SDL_Log("Failed to load upscaled output: %s", out_path);
         return NULL;
     }
 
     // delete the temp file after loading
     unlink(out_path);
-    return bitmap;
+    return surface;
 }
