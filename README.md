@@ -99,6 +99,7 @@ Where `<comic-file-or-directory>` can be:
 - **Last Page**: End
 - **Toggle Fullscreen**: F12 or F key
 - **Cycle Overlay Mode**: O key
+- **Toggle Color Fix Filter**: X key
 - **Exit Viewer**: Escape
 - **Navigate**: Mouse wheel scrolling
 - **Toggle ImGui overlay**: F1

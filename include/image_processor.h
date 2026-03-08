@@ -11,6 +11,7 @@ typedef struct {
     double contrast;        // -100 to 100 (0 = no change)
     double saturation;      // 0.0 - 2.0 (1.0 = no change)
     bool color_balance;     // Auto color balance
+    bool color_fix_enabled; // Cast/levels correction filter toggle
     bool sharpen;          // Apply unsharp mask
     bool enhancement_enabled;
 } ImageProcessingOptions;
@@ -22,6 +23,7 @@ void auto_enhance_image(SDL_Surface* surface, const ImageProcessingOptions* opti
 void adjust_gamma_brightness_contrast(SDL_Surface* surface, double gamma, double brightness, double contrast);
 void adjust_saturation(SDL_Surface* surface, double saturation);
 void auto_color_balance(SDL_Surface* surface);
+void apply_color_fix(SDL_Surface* surface);
 void sharpen_image(SDL_Surface* surface, double amount);
 
 // Get default processing options

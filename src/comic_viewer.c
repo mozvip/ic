@@ -58,8 +58,8 @@ typedef struct LoadViewTask {
 static void create_texture(SDL_Renderer *renderer, ImageView *view);
 static void update_progress(float progress, const char *message);
 static void generate_default_views(void);
-static void previous_view(void);
-static void next_view(void);
+static void go_to_previous_view(void);
+static void go_to_next_view(void);
 void free_view_texture(ImageView *view) ;
 
 static SDL_Renderer *create_renderer_prefer_gpu_vulkan(SDL_Window *window);
@@ -685,9 +685,9 @@ static void handle_events(void) {
                 }
                 // Mouse wheel for page navigation
                 if (event.wheel.y > 0) {  // Scroll up
-                    previous_view();
+                    go_to_previous_view();
                 } else if (event.wheel.y < 0) {  // Scroll down
-                    next_view();
+                    go_to_next_view();
                 }
                 break;
                 
@@ -746,9 +746,9 @@ static void handle_events(void) {
             case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
                 // Map left/right shoulder to page navigation
                 if (event.gbutton.button == SDL_GAMEPAD_BUTTON_LEFT_SHOULDER) {
-                    previous_view();
+                    go_to_previous_view();
                 } else if (event.gbutton.button == SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER) {
-                    next_view();
+                    go_to_next_view();
                 }
                 break;
 
@@ -992,13 +992,13 @@ static void handle_events(void) {
                     case SDLK_RIGHT:
                     case SDLK_SPACE:
                     case SDLK_DOWN:
-                        next_view();
+                        go_to_next_view();
                         break;
                         
                     case SDLK_LEFT:
                     case SDLK_UP:
                     case SDLK_BACKSPACE:
-                        previous_view();
+                        go_to_previous_view();
                         break;
                         
                     case SDLK_HOME:
@@ -1088,6 +1088,20 @@ static void handle_events(void) {
                         {
                             options->enhancement_enabled = !options->enhancement_enabled;
                             // Force reload of only the currently visible images to apply/remove enhancements
+                            unload_view(viewer.current_view_node);
+                            load_view(viewer.current_view_node);
+                        }
+                        break;
+
+                    case SDLK_X: // Toggle color-fix filter
+                        {
+                            options->color_fix_enabled = !options->color_fix_enabled;
+                            snprintf(viewer.gamepad_status_msg,
+                                     sizeof(viewer.gamepad_status_msg),
+                                     "Color fix: %s",
+                                     options->color_fix_enabled ? "ON" : "OFF");
+                            viewer.gamepad_status_until = SDL_GetTicks() + 1500;
+
                             unload_view(viewer.current_view_node);
                             load_view(viewer.current_view_node);
                         }
@@ -1272,6 +1286,14 @@ static void free_resources(void) {
     }
 }
 
+// Helper function to clean up thread resources on early exit (when thread becomes stale)
+static int cleanup_load_thread_resources(SDL_Surface *combined_surface) {
+    if (combined_surface) {
+        SDL_DestroySurface(combined_surface);
+    }
+    return 0;
+}
+
 // Thread: decode/prepare surfaces only, then post event to main thread to create texture
 static int load_view_surfaces_in_thread(void *data) {
     LoadViewTask *task = (LoadViewTask *)data;
@@ -1286,7 +1308,14 @@ static int load_view_surfaces_in_thread(void *data) {
     int max_height = 0;
 
     SDL_Surface *surface = NULL;
+    SDL_Surface *combined_surface = NULL;  // track the combined surface for cleanup
     for (int i = 0; i < view->count; i++) {
+
+        // check if the running thread is still the active load thread for the viewer (not canceled by user switching page)
+        if (generation != SDL_GetAtomicInt(&viewer.load_generation)) {
+            return cleanup_load_thread_resources(combined_surface);
+        }
+
         int image_index = view->image_indices[i];
         ImageEntry *image = &viewer.images[image_index];
 
@@ -1314,12 +1343,8 @@ static int load_view_surfaces_in_thread(void *data) {
     }
 
     // check if the running thread is still the active load thread for the viewer (not canceled by user switching page)
-    int current_gen = SDL_GetAtomicInt(&viewer.load_generation);
-    if (generation != current_gen) {
-        SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION, "Worker thread stale, exiting: gen=%d vs current=%d", 
-                    generation, current_gen);
-        // This thread is no longer relevant, exit without doing anything
-        return 0;
+    if (generation != SDL_GetAtomicInt(&viewer.load_generation)) {
+        return cleanup_load_thread_resources(combined_surface);
     }
 
     if (view->count > 1) {
@@ -1329,10 +1354,16 @@ static int load_view_surfaces_in_thread(void *data) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create combined surface: %s", SDL_GetError());
             return -1;
         }
+        combined_surface = surface;  // track for cleanup
 
         SDL_SetSurfaceBlendMode(surface, SDL_BLENDMODE_NONE);
         int current_x = 0;
         for (int i = 0; i < view->count; i++) {
+
+            if (generation != SDL_GetAtomicInt(&viewer.load_generation)) {
+                return cleanup_load_thread_resources(combined_surface);
+            }
+
             int image_index = view->image_indices[i];
             ImageEntry *image = &viewer.images[image_index];
             // Copy the image surface to the combined surface
@@ -1346,6 +1377,10 @@ static int load_view_surfaces_in_thread(void *data) {
             current_x += image->surface->w;
         }
     }
+
+    if (generation != SDL_GetAtomicInt(&viewer.load_generation)) {
+        return cleanup_load_thread_resources(combined_surface);
+    }    
 
     // Detect and crop white borders
     int left = 0, right = surface->w - 1;
@@ -1407,6 +1442,10 @@ static int load_view_surfaces_in_thread(void *data) {
             break; // Found non-white content
         }
     }
+
+    if (generation != SDL_GetAtomicInt(&viewer.load_generation)) {
+        return cleanup_load_thread_resources(combined_surface);
+    }
     
     // Scan from right edge inward
     for (right = surface->w - 1; right > left + 100; right--) { // Ensure min width
@@ -1448,6 +1487,10 @@ static int load_view_surfaces_in_thread(void *data) {
             break; // Found non-white content
         }
     }
+
+    if (generation != SDL_GetAtomicInt(&viewer.load_generation)) {
+        return cleanup_load_thread_resources(combined_surface);
+    }
     
     // Scan from top edge down
     for (top = 0; top < surface->h - 50; top++) {
@@ -1488,6 +1531,10 @@ static int load_view_surfaces_in_thread(void *data) {
         if (non_white_count >= required_non_white) {
             break; // Found non-white content
         }
+    }
+
+    if (generation != SDL_GetAtomicInt(&viewer.load_generation)) {
+        return cleanup_load_thread_resources(combined_surface);
     }
     
     // Scan from bottom edge up
@@ -1531,6 +1578,10 @@ static int load_view_surfaces_in_thread(void *data) {
         }
     }
 
+    if (generation != SDL_GetAtomicInt(&viewer.load_generation)) {
+        return cleanup_load_thread_resources(combined_surface);
+    }
+
     SDL_FRect crop_rect = {left, top, right - left + 1, bottom - top + 1};
     if (crop_rect.w <= 0 || crop_rect.h <= 0) {
         // reset crop rect to full image size
@@ -1540,22 +1591,25 @@ static int load_view_surfaces_in_thread(void *data) {
         crop_rect.h = surface->h;
     }
     view->crop_rect = crop_rect;
-    
+   
     // Analyze edges
     analyze_image_left_edge(surface, &view->crop_rect, &view->left_edge_color);
+    if (generation != SDL_GetAtomicInt(&viewer.load_generation)) {
+        return cleanup_load_thread_resources(combined_surface);
+    }
     analyze_image_right_edge(surface, &view->crop_rect, &view->right_edge_color);
-
+    if (generation != SDL_GetAtomicInt(&viewer.load_generation)) {
+        return cleanup_load_thread_resources(combined_surface);
+    }
     view->surface = surface; // transfer ownership to main thread
 
     // Post to main thread to convert surface -> texture
     if (surface) {
-        int final_gen = SDL_GetAtomicInt(&viewer.load_generation);
-        if (generation != final_gen) {
-            SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION, "Worker discarding surface before post: gen=%d vs current=%d", 
-                        generation, final_gen);
-            if (view->count > 1) SDL_DestroySurface(surface);
+        if (generation != SDL_GetAtomicInt(&viewer.load_generation)) {
+            cleanup_load_thread_resources(combined_surface);
+            if (view->count > 1 && surface) SDL_DestroySurface(surface);
             return 0;
-        }
+        }       
         PreloadResult *res = malloc(sizeof(PreloadResult));
         if (res) {
             res->view = view;
@@ -1740,7 +1794,7 @@ static void view_changed(ImageView *old_view_node, ImageView *new_view_node) {
     viewer.current_view_node = new_view_node;
 }
 
-void previous_view() {
+void go_to_previous_view() {
     if (!viewer.current_view_node || !viewer.current_view_node->prev) {
         return;
     }
@@ -1750,7 +1804,7 @@ void previous_view() {
     view_changed(viewer.current_view_node, viewer.current_view_node->prev);
 }
 
-void next_view() {
+void go_to_next_view() {
     if (!viewer.current_view_node || !viewer.current_view_node->next) {
         return;
     }

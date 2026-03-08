@@ -14,6 +14,7 @@ ImageProcessingOptions* get_default_processing_options(void) {
     options->contrast = 0.0;
     options->saturation = 1.0;
     options->color_balance = true;
+    options->color_fix_enabled = false;
     options->sharpen = false;
 
     return options;
@@ -115,6 +116,8 @@ void adjust_saturation(SDL_Surface* surface, double saturation) {
 }
 
 void auto_color_balance(SDL_Surface* surface) {
+    if (!surface) return;
+
     SDL_LockSurface(surface);
 
     int width = surface->w;
@@ -125,13 +128,10 @@ void auto_color_balance(SDL_Surface* surface) {
     unsigned long r_sum = 0, g_sum = 0, b_sum = 0;
     unsigned long pixel_count = width * height;
 
-    // First pass: calculate averages using direct memory access
-    Uint32 *pixels = (Uint32 *)surface->pixels;
-    int pitch_in_pixels = surface->pitch / sizeof(Uint32);
-    
+    // First pass: calculate averages with format-safe pixel access.
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++) {
-            Uint32 pixel = pixels[y * pitch_in_pixels + x];
+            Uint32 pixel = get_pixel(surface, x, y);
             Uint8 r, g, b, a;
             SDL_GetRGBA(pixel, fmt, palette, &r, &g, &b, &a);
             r_sum += r;
@@ -151,10 +151,18 @@ void auto_color_balance(SDL_Surface* surface) {
             double g_factor = gray_avg / g_avg;
             double b_factor = gray_avg / b_avg;
 
-            // Second pass: apply color balance using direct memory access
+            // Clamp correction strength to avoid extreme shifts on stylized art.
+            if (r_factor < 0.80) r_factor = 0.80;
+            if (r_factor > 1.20) r_factor = 1.20;
+            if (g_factor < 0.80) g_factor = 0.80;
+            if (g_factor > 1.20) g_factor = 1.20;
+            if (b_factor < 0.80) b_factor = 0.80;
+            if (b_factor > 1.20) b_factor = 1.20;
+
+            // Second pass: apply color balance with format-safe writes.
             for (int y = 0; y < height; y++) {
                 for (int x = 0; x < width; x++) {
-                    Uint32 pixel = pixels[y * pitch_in_pixels + x];
+                    Uint32 pixel = get_pixel(surface, x, y);
                     Uint8 r, g, b, a;
                     SDL_GetRGBA(pixel, fmt, palette, &r, &g, &b, &a);
                     
@@ -162,9 +170,79 @@ void auto_color_balance(SDL_Surface* surface) {
                     g = (Uint8)fmin(255, g * g_factor);
                     b = (Uint8)fmin(255, b * b_factor);
 
-                    pixels[y * pitch_in_pixels + x] = SDL_MapRGBA(fmt, palette, r, g, b, a);
+                    put_pixel(surface, x, y, SDL_MapRGBA(fmt, palette, r, g, b, a));
                 }
             }
+        }
+    }
+
+    SDL_UnlockSurface(surface);
+}
+
+void apply_color_fix(SDL_Surface* surface) {
+    if (!surface) return;
+
+    SDL_LockSurface(surface);
+
+    int width = surface->w;
+    int height = surface->h;
+    const SDL_PixelFormatDetails* fmt = SDL_GetPixelFormatDetails(surface->format);
+    const SDL_Palette *palette = SDL_GetSurfacePalette(surface);
+
+    unsigned long r_sum = 0, g_sum = 0, b_sum = 0;
+    unsigned long pixel_count = (unsigned long)width * (unsigned long)height;
+
+    // Compute average channel values for a conservative gray-world correction.
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            Uint32 pixel = get_pixel(surface, x, y);
+            Uint8 r, g, b, a;
+            SDL_GetRGBA(pixel, fmt, palette, &r, &g, &b, &a);
+            (void)a;
+            r_sum += r;
+            g_sum += g;
+            b_sum += b;
+        }
+    }
+
+    if (pixel_count == 0 || r_sum == 0 || g_sum == 0 || b_sum == 0) {
+        SDL_UnlockSurface(surface);
+        return;
+    }
+
+    double r_avg = (double)r_sum / (double)pixel_count;
+    double g_avg = (double)g_sum / (double)pixel_count;
+    double b_avg = (double)b_sum / (double)pixel_count;
+    double gray_avg = (r_avg + g_avg + b_avg) / 3.0;
+
+    double r_factor = gray_avg / r_avg;
+    double g_factor = gray_avg / g_avg;
+    double b_factor = gray_avg / b_avg;
+
+    // Keep color-fix subtle to avoid visible artifacts.
+    if (r_factor < 0.90) r_factor = 0.90;
+    if (r_factor > 1.10) r_factor = 1.10;
+    if (g_factor < 0.90) g_factor = 0.90;
+    if (g_factor > 1.10) g_factor = 1.10;
+    if (b_factor < 0.90) b_factor = 0.90;
+    if (b_factor > 1.10) b_factor = 1.10;
+
+    // Apply white-balance correction.
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            Uint32 pixel = get_pixel(surface, x, y);
+            Uint8 r, g, b, a;
+            SDL_GetRGBA(pixel, fmt, palette, &r, &g, &b, &a);
+
+            double nr = (double)r * r_factor;
+            double ng = (double)g * g_factor;
+            double nb = (double)b * b_factor;
+
+            r = (Uint8)fmax(0.0, fmin(255.0, nr));
+            g = (Uint8)fmax(0.0, fmin(255.0, ng));
+            b = (Uint8)fmax(0.0, fmin(255.0, nb));
+
+            put_pixel(surface, x, y, SDL_MapRGBA(fmt, palette, r, g, b, a));
         }
     }
 
@@ -178,20 +256,28 @@ void sharpen_image(SDL_Surface* surface, double amount) {
 }
 
 void auto_enhance_image(SDL_Surface* surface, const ImageProcessingOptions* options) {
+    if (!surface || !options) return;
 
-    if (options->color_balance) {
-        auto_color_balance(surface);
+    if (options->color_fix_enabled) {
+        apply_color_fix(surface);
     }
 
-    if (options->gamma != 1.0 || options->brightness != 0.0 || options->contrast != 0.0) {
-        adjust_gamma_brightness_contrast(surface, options->gamma, options->brightness, options->contrast);
-    }
-    
-    if (options->saturation != 1.0) {
-        adjust_saturation(surface, options->saturation);
-    }
+    // Keep the legacy enhancement stack behind its own toggle.
+    if (options->enhancement_enabled) {
+        if (options->color_balance) {
+            auto_color_balance(surface);
+        }
 
-    if (options->sharpen) {
-        sharpen_image(surface, 1.0);
+        if (options->gamma != 1.0 || options->brightness != 0.0 || options->contrast != 0.0) {
+            adjust_gamma_brightness_contrast(surface, options->gamma, options->brightness, options->contrast);
+        }
+        
+        if (options->saturation != 1.0) {
+            adjust_saturation(surface, options->saturation);
+        }
+
+        if (options->sharpen) {
+            sharpen_image(surface, 1.0);
+        }
     }
 }

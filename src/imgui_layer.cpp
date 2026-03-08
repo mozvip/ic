@@ -6,6 +6,7 @@
 
 #include "comic_viewer.h"
 #include "image_loader.h"
+#include "image_processor.h"
 #include "pdf_backend.h"
 
 #include "imgui.h"
@@ -19,6 +20,10 @@ static SDL_Renderer *g_renderer = nullptr;
 static char g_status_message[256] = {0};
 static Uint64 g_status_message_time = 0;   // Timestamp when the message was set
 static Uint64 g_status_message_duration = 5000; // Auto-dismiss after 5 seconds
+
+extern "C" {
+extern ImageProcessingOptions* options;
+}
 
 bool imgui_layer_init(SDL_Window *window, SDL_Renderer *renderer) {
     if (g_imgui_initialized) return true;
@@ -163,6 +168,16 @@ static void imgui_layer_build_ui(void) {
             if (ImGui::Combo("Overlay Mode", &overlay_index, overlay_items, IM_ARRAYSIZE(overlay_items))) {
                 viewer.overlay_mode = (OverlayMode)overlay_index;
                 viewer.last_page_change_time = SDL_GetTicks();
+            }
+
+            if (options) {
+                bool color_fix = options->color_fix_enabled;
+                if (ImGui::Checkbox("Color Fix Filter", &color_fix)) {
+                    options->color_fix_enabled = color_fix;
+                    comic_viewer_reload_current_view();
+                    viewer.last_page_change_time = SDL_GetTicks();
+                    imgui_layer_set_status_message(color_fix ? "Color fix enabled" : "Color fix disabled");
+                }
             }
         }
 
