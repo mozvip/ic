@@ -25,9 +25,10 @@ void cbr_close(ArchiveHandle *handle);
 // Helper function to check if unrar is installed
 static bool check_unrar_available() {
     const char *args[] = {"which", "unrar", NULL};
-    char *output = execute_command_with_output(args);
-    bool found = (output != NULL && strlen(output) > 0);
-    free(output);
+    char *output = NULL;
+    int rc = execute_process(args, true, &output);
+    bool found = (rc == 0 && output != NULL && strlen(output) > 0);
+    if (output) SDL_free(output);
     return found;
 }
 
@@ -83,8 +84,8 @@ ArchiveHandle* cbr_open(const char *path, int *total_images, ProgressCallback pr
     // Use unrar command to list files in the archive
     const char *args[] = {"unrar", "lb", path, NULL};
     
-    char *output = execute_command_with_output(args);
-    if (output == NULL) {
+    char *output = NULL;
+    if (execute_process(args, true, &output) != 0 || output == NULL) {
         fprintf(stderr, "Failed to run unrar command to list files\n");
         cbr_close(handle);
         return NULL;
@@ -102,7 +103,7 @@ ArchiveHandle* cbr_open(const char *path, int *total_images, ProgressCallback pr
     
     if (!image_entries) {
         fprintf(stderr, "Memory allocation failed\n");
-        free(output);
+                    SDL_free(output);
         cbr_close(handle);
         return NULL;
     }
@@ -127,7 +128,7 @@ ArchiveHandle* cbr_open(const char *path, int *total_images, ProgressCallback pr
                         free(image_entries[i]);
                     }
                     free(image_entries);
-                    free(output);
+                    SDL_free(output);
                     cbr_close(handle);
                     return NULL;
                 }
@@ -140,7 +141,7 @@ ArchiveHandle* cbr_open(const char *path, int *total_images, ProgressCallback pr
         line = strtok(NULL, "\n");
     }
     
-    free(output);
+    SDL_free(output);
     
     if (count == 0) {
         fprintf(stderr, "No images found in RAR archive\n");
@@ -194,14 +195,14 @@ bool cbr_get_image(ArchiveHandle *handle, int index, char **out_path) {
     if (last_slash) {
         *last_slash = '\0';
         const char *args[] = {"mkdir", "-p", dir_part, NULL};
-        execute_command(args);
+        execute_process(args, false, NULL);
     }
     free(dir_part);
     
     // Extract only the requested file using unrar command
     const char *args[] = {"unrar", "x", "-o+", handle->path, entry_name, handle->temp_dir, NULL};
     
-    int extract_result = execute_command(args);
+    int extract_result = execute_process(args, false, NULL);
     
     if (extract_result != 0) {
         fprintf(stderr, "Failed to extract file from RAR archive: %s\n", entry_name);       
@@ -237,7 +238,7 @@ void cbr_close(ArchiveHandle *handle) {
     if (handle->temp_dir) {
         // Optionally remove temp files
         // const char *args[] = {"rm", "-rf", handle->temp_dir, NULL};
-        // execute_command(args);
+        // execute_process(args, false, NULL);
         free(handle->temp_dir);
     }
     

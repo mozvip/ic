@@ -165,7 +165,7 @@ bool cbz_get_image(ArchiveHandle *handle, int index, char **out_path) {
     if (last_slash) {
         *last_slash = '\0';
         const char *args[] = {"mkdir", "-p", dir_part, NULL};
-        execute_command(args);
+        execute_process(args, false, NULL);
     }
     free(dir_part);
     
@@ -241,7 +241,7 @@ void cbz_close(ArchiveHandle *handle) {
     if (handle->temp_dir) {
         // Optionally remove temp files
         // const char *args[] = {"rm", "-rf", handle->temp_dir, NULL};
-        // execute_command(args);
+        // execute_process(args, false, NULL);
         free(handle->temp_dir);
     }
     

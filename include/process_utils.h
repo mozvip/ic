@@ -4,13 +4,10 @@
 #include <SDL3/SDL.h>
 #include <stdbool.h>
 
-// Executes a command and waits for it to finish.
-// Returns the exit code of the process.
-int execute_command(const char **args);
-
-// Executes a command and captures its standard output.
-// The output is returned as a newly allocated string that must be freed by the caller.
-// Returns NULL if the command fails.
-char *execute_command_with_output(const char **args);
+// Executes a process and waits for it to finish.
+// When capture_output is true, stdout is captured and returned via out_output.
+// Captured output must be released with SDL_free by the caller.
+// Returns the process exit code, or -1 if process creation/read fails.
+int execute_process(const char **args, bool capture_output, char **out_output);
 
 #endif // PROCESS_UTILS_H

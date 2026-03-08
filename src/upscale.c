@@ -42,7 +42,7 @@ SDL_Surface* upscale(const char* input_path, int scale, const char* model, const
         NULL
     };
 
-    int rc = execute_command(args);
+    int rc = execute_process(args, false, NULL);
     if (rc != 0) {
         SDL_Log("RealESRGAN command failed (%d)", rc);
         return NULL;

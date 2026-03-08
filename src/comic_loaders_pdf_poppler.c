@@ -27,8 +27,8 @@ typedef struct PdfBackendContext {
 
 static int poppler_get_page_count(const char *path) {
     const char *args[] = {"pdfinfo", path, NULL};
-    char *output = execute_command_with_output(args);
-    if (!output) return -1;
+    char *output = NULL;
+    if (execute_process(args, true, &output) != 0 || !output) return -1;
 
     int n_pages = 0;
     char *line = strtok(output, "\n");
@@ -39,7 +39,7 @@ static int poppler_get_page_count(const char *path) {
         }
         line = strtok(NULL, "\n");
     }
-    free(output);
+    SDL_free(output);
     return n_pages;
 }
 
@@ -48,8 +48,11 @@ static int poppler_get_page_count(const char *path) {
 static bool poppler_is_available(void) {
     /* Check that pdfinfo and pdftoppm are reachable. */
     const char *args[] = {"pdfinfo", "-v", NULL};
-    char *out = execute_command_with_output(args);
-    if (out) { free(out); return true; }
+    char *out = NULL;
+    if (execute_process(args, true, &out) == 0 && out) {
+        SDL_free(out);
+        return true;
+    }
     return false;
 }
 
@@ -119,7 +122,7 @@ static bool poppler_render_page(PdfBackendContext *opaque, int page_index,
         prefix,
         NULL
     };
-    execute_command(args);
+    execute_process(args, false, NULL);
 
     if (access(expected, F_OK) != 0) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
