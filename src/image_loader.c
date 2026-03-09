@@ -114,7 +114,7 @@ static SDL_Surface *load_surface_freeimage(const char *filename, ImageProcessing
     SDL_DestroySurface(borrowed);
     FreeImage_Unload(bitmap24);
 
-    if (options && (options->enhancement_enabled || options->color_fix_enabled)) {
+    if (options && (options->enhancement_enabled || options->color_filter != COLOR_FILTER_NONE)) {
         auto_enhance_image(surface, options);
     }
 
@@ -134,7 +134,7 @@ static SDL_Surface *load_surface_sdl_image(const char *filename, ImageProcessing
         return NULL;
     }
 
-    if (options && (options->enhancement_enabled || options->color_fix_enabled)) {
+    if (options && (options->enhancement_enabled || options->color_filter != COLOR_FILTER_NONE)) {
         auto_enhance_image(surface, options);
     }
 

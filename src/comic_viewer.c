@@ -1093,13 +1093,19 @@ static void handle_events(void) {
                         }
                         break;
 
-                    case SDLK_X: // Toggle color-fix filter
+                    case SDLK_X: // Cycle through color filters
                         {
-                            options->color_fix_enabled = !options->color_fix_enabled;
+                            // Cycle to next filter
+                            int next_filter = (int)options->color_filter + 1;
+                            if (next_filter >= COLOR_FILTER_COUNT) {
+                                next_filter = COLOR_FILTER_NONE;
+                            }
+                            options->color_filter = (ColorFilterType)next_filter;
+
                             snprintf(viewer.gamepad_status_msg,
                                      sizeof(viewer.gamepad_status_msg),
-                                     "Color fix: %s",
-                                     options->color_fix_enabled ? "ON" : "OFF");
+                                     "Color Filter: %s",
+                                     color_filter_get_name(options->color_filter));
                             viewer.gamepad_status_until = SDL_GetTicks() + 1500;
 
                             unload_view(viewer.current_view_node);

@@ -171,12 +171,26 @@ static void imgui_layer_build_ui(void) {
             }
 
             if (options) {
-                bool color_fix = options->color_fix_enabled;
-                if (ImGui::Checkbox("Color Fix Filter", &color_fix)) {
-                    options->color_fix_enabled = color_fix;
+                int filter_index = (int)options->color_filter;
+                if (filter_index < 0 || filter_index >= COLOR_FILTER_COUNT) {
+                    filter_index = COLOR_FILTER_NONE;
+                }
+
+                static const char *filter_items[] = {
+                    "None",
+                    "Gray World",
+                    "Reduce Warm",
+                    "Reduce Cool",
+                    "Boost Contrast",
+                    "Desaturate",
+                    "Binarize"
+                };
+                
+                if (ImGui::Combo("Color Filter", &filter_index, filter_items, IM_ARRAYSIZE(filter_items))) {
+                    options->color_filter = (ColorFilterType)filter_index;
                     comic_viewer_reload_current_view();
                     viewer.last_page_change_time = SDL_GetTicks();
-                    imgui_layer_set_status_message(color_fix ? "Color fix enabled" : "Color fix disabled");
+                    imgui_layer_set_status_message(color_filter_get_name((ColorFilterType)filter_index));
                 }
             }
         }

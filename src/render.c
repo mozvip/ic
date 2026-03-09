@@ -108,6 +108,20 @@ void viewer_display_info(void) {
         if (viewer.overlay_mode == OVERLAY_STRETCHED) overlay_str = "STR";
         else if (viewer.overlay_mode == OVERLAY_AMBILIGHT) overlay_str = "AMBI";
 
+        const char* filter_str = "";
+        if (options) {
+            switch (options->color_filter) {
+                case COLOR_FILTER_NONE: filter_str = ""; break;
+                case COLOR_FILTER_GRAY_WORLD: filter_str = "[GW]"; break;
+                case COLOR_FILTER_WARM_NEUTRALIZER: filter_str = "[WN]"; break;
+                case COLOR_FILTER_COOL_NEUTRALIZER: filter_str = "[CN]"; break;
+                case COLOR_FILTER_BOOST_CONTRAST: filter_str = "[BC]"; break;
+                case COLOR_FILTER_DESATURATE: filter_str = "[DES]"; break;
+                case COLOR_FILTER_BINARIZE: filter_str = "[BW]"; break;
+                default: filter_str = ""; break;
+            }
+        }
+
         char info_text[128];
         int w = 0, h = 0;
         if (viewer.current_view_node && viewer.current_view_node->texture) {
@@ -118,7 +132,7 @@ void viewer_display_info(void) {
         snprintf(info_text, sizeof(info_text), "%d / %d %s %s [%s] (%dx%d)",
         viewer.current_view_index + 1, view_count,
         options ? (options->enhancement_enabled ? "[E+]" : "[E-]") : "[E-]",
-        options ? (options->color_fix_enabled ? "[CF+]" : "[CF-]") : "[CF-]",
+        filter_str,
         overlay_str, w, h);
 
         SDL_Texture *text_texture = render_text_internal(info_text, (SDL_Color){255,255,255,255});
