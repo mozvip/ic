@@ -61,10 +61,256 @@ static void generate_default_views(void);
 static void go_to_previous_view(void);
 static void go_to_next_view(void);
 void free_view_texture(ImageView *view) ;
+static void viewer_state_save_current(void);
+static void viewer_state_restore_for_source(void);
 
 static SDL_Renderer *create_renderer_prefer_gpu_vulkan(SDL_Window *window);
 // File browser (separate module)
 #include "file_browser.h"
+
+typedef struct ViewerPersistedState {
+    int view_index;
+    int zoomed;
+    float zoom_level;
+    float zoom_center_x;
+    float zoom_center_y;
+    float pan_offset_x;
+    float pan_offset_y;
+} ViewerPersistedState;
+
+static char *viewer_state_build_key(const char *source_path, char *out, size_t out_size) {
+    if (!source_path || !out || out_size == 0) {
+        return NULL;
+    }
+
+    char resolved[PATH_MAX];
+    if (realpath(source_path, resolved)) {
+        strncpy(out, resolved, out_size - 1);
+    } else {
+        strncpy(out, source_path, out_size - 1);
+    }
+    out[out_size - 1] = '\0';
+    return out;
+}
+
+static char *viewer_state_file_path(void) {
+    char *pref_path = SDL_GetPrefPath("mozvip", "ic");
+    if (!pref_path) {
+        return NULL;
+    }
+
+    const char *file_name = "viewer_state.tsv";
+    size_t len = strlen(pref_path) + strlen(file_name) + 1;
+    char *full = malloc(len);
+    if (!full) {
+        SDL_free(pref_path);
+        return NULL;
+    }
+
+    snprintf(full, len, "%s%s", pref_path, file_name);
+    SDL_free(pref_path);
+    return full;
+}
+
+static bool viewer_state_parse_line(const char *line, char *path, size_t path_size, ViewerPersistedState *state) {
+    if (!line || !path || !state || path_size == 0) {
+        return false;
+    }
+
+    char buf[8192];
+    strncpy(buf, line, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+
+    char *newline = strchr(buf, '\n');
+    if (newline) {
+        *newline = '\0';
+    }
+
+    char *saveptr = NULL;
+    char *token = strtok_r(buf, "\t", &saveptr);
+    if (!token) {
+        return false;
+    }
+    strncpy(path, token, path_size - 1);
+    path[path_size - 1] = '\0';
+
+    token = strtok_r(NULL, "\t", &saveptr);
+    if (!token) return false;
+    state->view_index = atoi(token);
+
+    token = strtok_r(NULL, "\t", &saveptr);
+    if (!token) return false;
+    state->zoomed = atoi(token);
+
+    token = strtok_r(NULL, "\t", &saveptr);
+    if (!token) return false;
+    state->zoom_level = strtof(token, NULL);
+
+    token = strtok_r(NULL, "\t", &saveptr);
+    if (!token) return false;
+    state->zoom_center_x = strtof(token, NULL);
+
+    token = strtok_r(NULL, "\t", &saveptr);
+    if (!token) return false;
+    state->zoom_center_y = strtof(token, NULL);
+
+    token = strtok_r(NULL, "\t", &saveptr);
+    if (!token) return false;
+    state->pan_offset_x = strtof(token, NULL);
+
+    token = strtok_r(NULL, "\t", &saveptr);
+    if (!token) return false;
+    state->pan_offset_y = strtof(token, NULL);
+
+    return true;
+}
+
+static void viewer_state_restore_for_source(void) {
+    if (!viewer.source_path || viewer.view_count <= 0 || !viewer.first_view) {
+        return;
+    }
+
+    char key[PATH_MAX];
+    if (!viewer_state_build_key(viewer.source_path, key, sizeof(key))) {
+        return;
+    }
+
+    char *state_path = viewer_state_file_path();
+    if (!state_path) {
+        return;
+    }
+
+    FILE *f = fopen(state_path, "r");
+    free(state_path);
+    if (!f) {
+        return;
+    }
+
+    char line[8192];
+    bool found = false;
+    ViewerPersistedState st = {0};
+    while (fgets(line, sizeof(line), f)) {
+        char line_path[PATH_MAX];
+        ViewerPersistedState tmp;
+        if (!viewer_state_parse_line(line, line_path, sizeof(line_path), &tmp)) {
+            continue;
+        }
+        if (strcmp(line_path, key) == 0) {
+            st = tmp;
+            found = true;
+            break;
+        }
+    }
+    fclose(f);
+
+    if (!found) {
+        return;
+    }
+
+    if (st.view_index < 0) {
+        st.view_index = 0;
+    }
+    if (st.view_index >= viewer.view_count) {
+        st.view_index = viewer.view_count - 1;
+    }
+
+    ImageView *node = viewer.first_view;
+    int idx = 0;
+    while (node && idx < st.view_index) {
+        node = node->next;
+        idx++;
+    }
+    if (node) {
+        viewer.current_view_node = node;
+        viewer.current_view_index = st.view_index;
+    }
+
+    viewer.zoomed = (st.zoomed != 0);
+    viewer.zoom_level = st.zoom_level;
+    if (viewer.zoom_level < 1.0f) {
+        viewer.zoom_level = 1.0f;
+    }
+    if (viewer.zoom_level > viewer.max_zoom) {
+        viewer.zoom_level = viewer.max_zoom;
+    }
+    viewer.zoom_center_x = st.zoom_center_x;
+    viewer.zoom_center_y = st.zoom_center_y;
+    viewer.pan_offset_x = st.pan_offset_x;
+    viewer.pan_offset_y = st.pan_offset_y;
+
+    if (!viewer.zoomed) {
+        viewer.zoom_level = 1.0f;
+        viewer.pan_offset_x = 0.0f;
+        viewer.pan_offset_y = 0.0f;
+    }
+}
+
+static void viewer_state_save_current(void) {
+    if (!viewer.source_path || viewer.view_count <= 0 || !viewer.current_view_node) {
+        return;
+    }
+
+    char key[PATH_MAX];
+    if (!viewer_state_build_key(viewer.source_path, key, sizeof(key))) {
+        return;
+    }
+
+    char *state_path = viewer_state_file_path();
+    if (!state_path) {
+        return;
+    }
+
+    char tmp_path[PATH_MAX];
+    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", state_path);
+
+    FILE *in = fopen(state_path, "r");
+    FILE *out = fopen(tmp_path, "w");
+    if (!out) {
+        if (in) fclose(in);
+        free(state_path);
+        return;
+    }
+
+    bool replaced = false;
+    char line[8192];
+    if (in) {
+        while (fgets(line, sizeof(line), in)) {
+            char line_path[PATH_MAX];
+            ViewerPersistedState parsed;
+            if (viewer_state_parse_line(line, line_path, sizeof(line_path), &parsed) && strcmp(line_path, key) == 0) {
+                fprintf(out, "%s\t%d\t%d\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\n",
+                        key,
+                        viewer.current_view_index,
+                        viewer.zoomed ? 1 : 0,
+                        viewer.zoom_level,
+                        viewer.zoom_center_x,
+                        viewer.zoom_center_y,
+                        viewer.pan_offset_x,
+                        viewer.pan_offset_y);
+                replaced = true;
+            } else {
+                fputs(line, out);
+            }
+        }
+        fclose(in);
+    }
+
+    if (!replaced) {
+        fprintf(out, "%s\t%d\t%d\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\n",
+                key,
+                viewer.current_view_index,
+                viewer.zoomed ? 1 : 0,
+                viewer.zoom_level,
+                viewer.zoom_center_x,
+                viewer.zoom_center_y,
+                viewer.pan_offset_x,
+                viewer.pan_offset_y);
+    }
+
+    fclose(out);
+    rename(tmp_path, state_path);
+    free(state_path);
+}
 
 bool comic_viewer_set_image_backend(const char *backend_name) {
     ImageBackend backend = image_loader_parse_backend(backend_name);
@@ -498,6 +744,7 @@ bool comic_viewer_load(const char *path) {
         imgui_layer_set_status_message(NULL);
         // generate default views
         generate_default_views();
+        viewer_state_restore_for_source();
         // Update window title to reflect loaded source filename (not full path)
         if (viewer.window && viewer.source_path) {
             const char *src = viewer.source_path;
@@ -593,6 +840,8 @@ void comic_viewer_run(void) {
 }
 
 void comic_viewer_cleanup(void) {
+    viewer_state_save_current();
+
     // Clean up progress bar resources
     progress_bar_cleanup();
     
