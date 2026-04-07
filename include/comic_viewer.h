@@ -9,9 +9,12 @@
 #include <SDL3/SDL.h>
 #include <SDL3_ttf/SDL_ttf.h>
 #include <stdbool.h>
-#include <FreeImage.h>
 #include "edges.h"
 #include "clipboard.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 // Maximum number of images we can handle
 #define MAX_IMAGES 1000
@@ -20,7 +23,6 @@
 typedef struct {
     char *path;               // Path to the image
     SDL_Surface *surface;     // Loaded surface
-    FIBITMAP *bitmap;         // FreeImage bitmap (if used)
     SDL_FRect crop_rect;       // Crop rectangle for the image
 } ImageEntry;
 
@@ -100,6 +102,7 @@ struct ViewerState {
     int monitor_index;        // Selected monitor index
     ArchiveHandle *archive;   // Handle for on-demand loading
     SDL_Thread *load_thread;                   // Thread for loading images
+    SDL_AtomicInt load_generation;             // Generation token for active load work
 
     // Progress indicator display timer
     Uint64 last_page_change_time;  // Time when the last page change occurred
@@ -166,6 +169,12 @@ extern struct ViewerState viewer;
 // monitor_index: Index of the monitor to use (-1 for default)
 bool comic_viewer_init(int monitor_index);
 
+// Set preferred image backend: auto|freeimage|sdl_image.
+bool comic_viewer_set_image_backend(const char *backend_name);
+
+// Reload currently visible view so runtime decoder/processing changes apply immediately.
+void comic_viewer_reload_current_view(void);
+
 // Load a comic file or directory
 bool comic_viewer_load(const char *path);
 bool comic_viewer_load_and_display(const char *path_to_folder, const char *image_file_to_display);
@@ -180,5 +189,9 @@ void comic_viewer_cleanup(void);
 SDL_Texture* viewer_render_text(const char *text, SDL_Color color);
 void viewer_init_view(ImageView *view);
 bool viewer_has_current_view(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // COMIC_VIEWER_H

@@ -5,6 +5,8 @@
 #include <SDL3/SDL.h>
 
 #include "comic_viewer.h"
+#include "image_loader.h"
+#include "image_processor.h"
 #include "pdf_backend.h"
 
 #include "imgui.h"
@@ -18,6 +20,10 @@ static SDL_Renderer *g_renderer = nullptr;
 static char g_status_message[256] = {0};
 static Uint64 g_status_message_time = 0;   // Timestamp when the message was set
 static Uint64 g_status_message_duration = 5000; // Auto-dismiss after 5 seconds
+
+extern "C" {
+extern ImageProcessingOptions* options;
+}
 
 bool imgui_layer_init(SDL_Window *window, SDL_Renderer *renderer) {
     if (g_imgui_initialized) return true;
@@ -137,9 +143,7 @@ static void imgui_layer_build_ui(void) {
     if (!g_imgui_visible) return;
 
     ImGui::SetNextWindowSize(ImVec2(460.0f, 300.0f), ImGuiCond_FirstUseEver);
-    if (ImGui::Begin("ic", &g_imgui_visible)) {
-        ImGui::TextUnformatted("Dear ImGui overlay (F1 to toggle)");
-        ImGui::Separator();
+    if (ImGui::Begin("IC Settings (F1 to toggle)", &g_imgui_visible)) {
         ImGui::Text("Renderer: %s", SDL_GetRendererName(g_renderer));
 
         ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
@@ -165,6 +169,78 @@ static void imgui_layer_build_ui(void) {
                 viewer.overlay_mode = (OverlayMode)overlay_index;
                 viewer.last_page_change_time = SDL_GetTicks();
             }
+
+            if (options) {
+                int filter_index = (int)options->color_filter;
+                if (filter_index < 0 || filter_index >= COLOR_FILTER_COUNT) {
+                    filter_index = COLOR_FILTER_NONE;
+                }
+
+                static const char *filter_items[] = {
+                    "None",
+                    "Gray World",
+                    "Reduce Warm",
+                    "Reduce Cool",
+                    "Boost Contrast",
+                    "Desaturate",
+                    "Binarize"
+                };
+                
+                if (ImGui::Combo("Color Filter", &filter_index, filter_items, IM_ARRAYSIZE(filter_items))) {
+                    options->color_filter = (ColorFilterType)filter_index;
+                    comic_viewer_reload_current_view();
+                    viewer.last_page_change_time = SDL_GetTicks();
+                    imgui_layer_set_status_message(color_filter_get_name((ColorFilterType)filter_index));
+                }
+            }
+        }
+
+        ImGui::SeparatorText("Image Backend");
+        {
+            int selected = (int)image_loader_get_active_backend();
+            if (selected < 0 || selected >= (int)IMAGE_BACKEND_COUNT) {
+                selected = (int)IMAGE_BACKEND_AUTO;
+            }
+
+            static const char *backend_labels[] = {
+                "Auto",
+                "FreeImage",
+                "SDL_image"
+            };
+
+            bool selectable[IMAGE_BACKEND_COUNT] = {true, true, true};
+            for (int i = 1; i < (int)IMAGE_BACKEND_COUNT; ++i) {
+                selectable[i] = image_loader_backend_available((ImageBackend)i);
+            }
+
+            static char display_labels[IMAGE_BACKEND_COUNT][48];
+            const char *items[IMAGE_BACKEND_COUNT];
+            for (int i = 0; i < (int)IMAGE_BACKEND_COUNT; ++i) {
+                if (i == (int)IMAGE_BACKEND_AUTO || selectable[i]) {
+                    snprintf(display_labels[i], sizeof(display_labels[i]), "%s", backend_labels[i]);
+                } else {
+                    snprintf(display_labels[i], sizeof(display_labels[i]), "%s [unavailable]", backend_labels[i]);
+                }
+                items[i] = display_labels[i];
+            }
+
+            if (ImGui::Combo("Image Decoder", &selected, items, IMAGE_BACKEND_COUNT)) {
+                if (selected == (int)IMAGE_BACKEND_AUTO || selectable[selected]) {
+                    if (image_loader_set_preferred_backend((ImageBackend)selected)) {
+                        comic_viewer_reload_current_view();
+                        viewer.last_page_change_time = SDL_GetTicks();
+                        imgui_layer_set_status_message("Image backend switched");
+                    } else {
+                        imgui_layer_set_status_message("Failed to switch image backend");
+                    }
+                } else {
+                    imgui_layer_set_status_message("Selected image backend is unavailable");
+                }
+            }
+
+            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
+                               "Active: %s",
+                               image_loader_backend_name(image_loader_get_active_backend()));
         }
 
         ImGui::SeparatorText("PDF Backend");

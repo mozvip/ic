@@ -66,27 +66,6 @@ static PdfBackendContext* mupdf_open(const char *pdf_path,
         return NULL;
     }
 
-    int n = 0;
-    fz_try(fz_ctx) {
-        n = fz_count_pages(fz_ctx, doc);
-    }
-    fz_catch(fz_ctx) {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-                     "MuPDF: cannot count pages – %s",
-                     fz_caught_message(fz_ctx));
-        fz_drop_document(fz_ctx, doc);
-        fz_drop_context(fz_ctx);
-        return NULL;
-    }
-
-    if (n <= 0) {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-                     "MuPDF: document has no pages");
-        fz_drop_document(fz_ctx, doc);
-        fz_drop_context(fz_ctx);
-        return NULL;
-    }
-
     MupdfContext *ctx = calloc(1, sizeof(*ctx));
     if (!ctx) {
         fz_drop_document(fz_ctx, doc);
@@ -94,17 +73,43 @@ static PdfBackendContext* mupdf_open(const char *pdf_path,
         return NULL;
     }
 
-    ctx->fz_ctx      = fz_ctx;
-    ctx->doc         = doc;
-    ctx->pdf_path    = strdup(pdf_path);
-    ctx->temp_dir    = strdup(temp_dir);
-    ctx->total_pages = n;
-    ctx->zoom        = (float)MUPDF_DEFAULT_DPI / MUPDF_BASE_DPI;
-    *page_count = n;
+    ctx->fz_ctx   = fz_ctx;
+    ctx->doc      = doc;
+    ctx->pdf_path = strdup(pdf_path);
+    ctx->temp_dir = strdup(temp_dir);
+    ctx->zoom     = (float)MUPDF_DEFAULT_DPI / MUPDF_BASE_DPI;
+
+    fz_try(fz_ctx) {
+        ctx->total_pages = fz_count_pages(fz_ctx, doc);
+    }
+    fz_catch(fz_ctx) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "MuPDF: cannot count pages – %s",
+                     fz_caught_message(fz_ctx));
+        free(ctx->pdf_path);
+        free(ctx->temp_dir);
+        free(ctx);
+        fz_drop_document(fz_ctx, doc);
+        fz_drop_context(fz_ctx);
+        return NULL;
+    }
+
+    if (ctx->total_pages <= 0) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "MuPDF: document has no pages");
+        free(ctx->pdf_path);
+        free(ctx->temp_dir);
+        free(ctx);
+        fz_drop_document(fz_ctx, doc);
+        fz_drop_context(fz_ctx);
+        return NULL;
+    }
+
+    *page_count = ctx->total_pages;
 
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                 "MuPDF: opened %s – %d pages (zoom %.2f)",
-                pdf_path, n, ctx->zoom);
+                pdf_path, ctx->total_pages, ctx->zoom);
 
     return (PdfBackendContext*)ctx;
 }

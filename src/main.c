@@ -17,6 +17,7 @@ void print_usage(const char *program_name) {
     printf("  -h, --help     Display this help message\n");
     printf("  -m, --monitor <index>  Specify which monitor to use (0 is primary)\n");
     printf("  --overlay <mode>       Specify overlay mode: gradient (default), stretched, ambilight\n");
+    printf("  --image-backend <name> Select image backend: auto, freeimage, sdl_image\n");
     printf("\n");
     printf("Supported formats:\n");
     printf("  - CBZ files (Comic ZIP archives)\n");
@@ -34,6 +35,7 @@ int main(int argc, char *argv[]) {
 
     int monitor_index = 0;  // Default to primary monitor
     const char *path = NULL;
+    const char *image_backend = NULL;
     int i;
     
     // Parse command line options
@@ -53,9 +55,19 @@ int main(int argc, char *argv[]) {
                  fprintf(stderr, "Unknown overlay mode: %s. Using default (gradient).\n", mode);
              }
              i++;
+        } else if (strcmp(argv[i], "--image-backend") == 0 && i + 1 < argc) {
+            image_backend = argv[i + 1];
+            i++;
         } else if (path == NULL && argv[i][0] != '-') {
             path = argv[i];
         }
+    }
+
+    if (image_backend && !comic_viewer_set_image_backend(image_backend)) {
+        fprintf(stderr,
+                "Invalid or unavailable image backend '%s' (expected auto, freeimage, or sdl_image)\n",
+                image_backend);
+        return 1;
     }
     
     // Initialize the comic viewer

@@ -108,6 +108,20 @@ void viewer_display_info(void) {
         if (viewer.overlay_mode == OVERLAY_STRETCHED) overlay_str = "STR";
         else if (viewer.overlay_mode == OVERLAY_AMBILIGHT) overlay_str = "AMBI";
 
+        const char* filter_str = "";
+        if (options) {
+            switch (options->color_filter) {
+                case COLOR_FILTER_NONE: filter_str = ""; break;
+                case COLOR_FILTER_GRAY_WORLD: filter_str = "[GW]"; break;
+                case COLOR_FILTER_WARM_NEUTRALIZER: filter_str = "[WN]"; break;
+                case COLOR_FILTER_COOL_NEUTRALIZER: filter_str = "[CN]"; break;
+                case COLOR_FILTER_BOOST_CONTRAST: filter_str = "[BC]"; break;
+                case COLOR_FILTER_DESATURATE: filter_str = "[DES]"; break;
+                case COLOR_FILTER_BINARIZE: filter_str = "[BW]"; break;
+                default: filter_str = ""; break;
+            }
+        }
+
         char info_text[128];
         int w = 0, h = 0;
         if (viewer.current_view_node && viewer.current_view_node->texture) {
@@ -115,9 +129,10 @@ void viewer_display_info(void) {
             h = (int)viewer.current_view_node->texture->h;
         }
 
-        snprintf(info_text, sizeof(info_text), "%d / %d %s [%s] (%dx%d)",
+        snprintf(info_text, sizeof(info_text), "%d / %d %s %s [%s] (%dx%d)",
         viewer.current_view_index + 1, view_count,
         options ? (options->enhancement_enabled ? "[E+]" : "[E-]") : "[E-]",
+        filter_str,
         overlay_str, w, h);
 
         SDL_Texture *text_texture = render_text_internal(info_text, (SDL_Color){255,255,255,255});
@@ -161,6 +176,33 @@ void viewer_render_current_view(void) {
 
     ImageView *current_display_view = viewer.current_view_node;
     if (!current_display_view || !current_display_view->texture) {
+        // Page is loading or empty - show loading indicator
+        if (current_display_view && viewer.load_thread && SDL_GetThreadState(viewer.load_thread) == SDL_THREAD_ALIVE) {
+            // Page is actively loading - show spinner
+            int centerX = (int)((float)viewer.drawable_width / 2.0f);
+            int centerY = (int)((float)viewer.drawable_height / 2.0f);
+            int radius = 30;
+            
+            // Animate the spinner based on time
+            Uint64 elapsed = SDL_GetTicks() - viewer.last_page_change_time;
+            float progress = fmodf((float)elapsed / 800.0f, 1.0f); // Full rotation every 800ms
+            draw_progress_indicator(viewer.renderer, progress, centerX, centerY, radius);
+            
+            // Show "Loading..." text below the spinner
+            SDL_Texture *loading_text = render_text_internal("Loading page...", (SDL_Color){200,200,200,255});
+            if (loading_text) {
+                float w, h;
+                SDL_GetTextureSize(loading_text, &w, &h);
+                SDL_FRect text_rect = { 
+                    (float)centerX - w / 2.0f, 
+                    (float)centerY + radius + 20.0f, 
+                    w, h 
+                };
+                SDL_RenderTexture(viewer.renderer, loading_text, NULL, &text_rect);
+                SDL_DestroyTexture(loading_text);
+            }
+        }
+        
         viewer_display_info();
         file_browser_render();
 
@@ -261,3 +303,4 @@ void viewer_render_current_view(void) {
     imgui_layer_render();
     SDL_RenderPresent(viewer.renderer);
 }
+

@@ -30,6 +30,9 @@ IC (Image Comic Viewer) is a lightweight, fast comic book reader for Linux built
   - libsdl3
   - libsdl3-image
   - libsdl3-ttf
+- One image decode backend:
+  - FreeImage (preferred when present)
+  - SDL3_image (fallback when FreeImage is unavailable)
 
 ## Installation
 
@@ -44,16 +47,26 @@ IC (Image Comic Viewer) is a lightweight, fast comic book reader for Linux built
 2. Ensure you have the required development libraries:
    ```
    # For Debian/Ubuntu
-   sudo apt install libsdl3-dev libsdl3-ttf-dev libzip-dev libfreeimage-dev
+  sudo apt install libsdl3-dev libsdl3-image-dev libsdl3-ttf-dev libzip-dev libfreeimage-dev
    
    # For Fedora
-   sudo dnf install SDL3-devel SDL3_ttf-devel libzip-devel freeimage-devel
+  sudo dnf install SDL3-devel SDL3_image-devel SDL3_ttf-devel libzip-devel freeimage-devel
    
    # For Arch Linux
-   sudo pacman -S sdl3 sdl3_ttf libzip freeimage
+  sudo pacman -S sdl3 sdl3_image sdl3_ttf libzip freeimage
    ```
 
-3. Build the project:
+  FreeImage is optional now. If it is missing, `ic` will use `SDL3_image`.
+
+3. Optional: choose a preferred image backend at configure time:
+
+  ```
+  meson setup builddir -Dimage_backend=auto       # default
+  meson setup builddir -Dimage_backend=freeimage
+  meson setup builddir -Dimage_backend=sdl_image
+  ```
+
+4. Build the project:
    
    ```
    meson setup builddir
@@ -64,6 +77,34 @@ IC (Image Comic Viewer) is a lightweight, fast comic book reader for Linux built
 IC includes a Dear ImGui debug overlay (toggle in-app with `F1`).
    
    For more detailed Meson build instructions, see [MESON_BUILD.md](MESON_BUILD.md).
+
+### Building an AppImage (Arch Linux)
+
+To reduce host ABI issues, the AppImage build uses the `sdl_image` backend (no FreeImage/libraw runtime dependency).
+
+1. Install AppImage tooling:
+  ```
+  yay -S --needed linuxdeploy-appimage appimagetool-bin imagemagick
+  ```
+
+2. Build the AppImage:
+  ```
+  ./scripts/build-appimage.sh
+  ```
+
+3. Run it:
+  ```
+  ./IC-*.AppImage <comic-file-or-directory>
+  ```
+
+Optional:
+```
+VERSION=1.0.0 ./scripts/build-appimage.sh
+```
+
+Notes:
+- The script disables linuxdeploy stripping (`NO_STRIP=1`) to avoid failures with RELR-enabled system libraries.
+- The script normalizes `ic.png` to a valid freedesktop icon size for AppImage packaging.
 
 ## Usage
 
@@ -86,9 +127,11 @@ Where `<comic-file-or-directory>` can be:
 - **Last Page**: End
 - **Toggle Fullscreen**: F12 or F key
 - **Cycle Overlay Mode**: O key
+- **Cycle Color Filters**: X key (Gray World, Reduce Warm, Reduce Cool, Boost Contrast, Desaturate, Binarize, None)
 - **Exit Viewer**: Escape
 - **Navigate**: Mouse wheel scrolling
 - **Toggle ImGui overlay**: F1
+- **Select image loader backend**: `--image-backend auto|freeimage|sdl_image`
 
 ## Example
 

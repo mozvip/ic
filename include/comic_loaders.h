@@ -9,6 +9,10 @@
 #include <stdbool.h>
 #include <SDL3/SDL.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // Include comic viewer types
 #include "comic_viewer.h"
 
@@ -52,5 +56,9 @@ void cbr_close(ArchiveHandle *handle);
 ArchiveHandle* pdf_open(const char *path, int *total_images, ProgressCallback progress_cb);
 bool pdf_get_image(ArchiveHandle *handle, int index, char **out_path);
 void pdf_close(ArchiveHandle *handle);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // COMIC_LOADERS_H
