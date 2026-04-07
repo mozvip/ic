@@ -9,7 +9,7 @@
             "type": "cppdbg",
             "request": "launch",
             "program": "${workspaceFolder}/builddir/ic",
-            "args": ["${workspaceFolder}/test/test.pdf"],
+            "args": ["/mnt/homesrvpc/8t2/Calibre-BD/Unknown/Batman.et.Robin.Annee.Un.2025 (11062)/Batman.et.Robin.Annee.Un.2025 - Unknown.cbz"],
             "stopAtEntry": false,
             "cwd": "${fileDirname}",
             "environment": [],

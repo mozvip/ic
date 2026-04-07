@@ -95,11 +95,12 @@ static bool poppler_render_page(PdfBackendContext *opaque, int page_index,
     snprintf(numbuf, sizeof(numbuf), "%0*d", digits, page_index + 1);
 
     char expected[512];
-    expected[0] = '\0';
-    strncat(expected, prefix,  sizeof(expected) - 1);
-    strncat(expected, "-",     sizeof(expected) - strlen(expected) - 1);
-    strncat(expected, numbuf,  sizeof(expected) - strlen(expected) - 1);
-    strncat(expected, ".jpg",  sizeof(expected) - strlen(expected) - 1);
+    int expected_len = snprintf(expected, sizeof(expected), "%s-%s.jpg", prefix, numbuf);
+    if (expected_len < 0 || (size_t)expected_len >= sizeof(expected)) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "Poppler: output path too long for page %d", page_index + 1);
+        return false;
+    }
 
     /* Cache: if the file already exists, return immediately. */
     if (access(expected, F_OK) == 0) {

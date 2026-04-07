@@ -78,6 +78,34 @@ IC includes a Dear ImGui debug overlay (toggle in-app with `F1`).
    
    For more detailed Meson build instructions, see [MESON_BUILD.md](MESON_BUILD.md).
 
+### Building an AppImage (Arch Linux)
+
+To reduce host ABI issues, the AppImage build uses the `sdl_image` backend (no FreeImage/libraw runtime dependency).
+
+1. Install AppImage tooling:
+  ```
+  yay -S --needed linuxdeploy-appimage appimagetool-bin imagemagick
+  ```
+
+2. Build the AppImage:
+  ```
+  ./scripts/build-appimage.sh
+  ```
+
+3. Run it:
+  ```
+  ./IC-*.AppImage <comic-file-or-directory>
+  ```
+
+Optional:
+```
+VERSION=1.0.0 ./scripts/build-appimage.sh
+```
+
+Notes:
+- The script disables linuxdeploy stripping (`NO_STRIP=1`) to avoid failures with RELR-enabled system libraries.
+- The script normalizes `ic.png` to a valid freedesktop icon size for AppImage packaging.
+
 ## Usage
 
 ### Basic Usage

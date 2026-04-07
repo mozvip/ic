@@ -64,7 +64,7 @@ dependencies = [
   m_dep,
 ]
 
-if freeimage_dep.found()
+if freeimage_dep.found() and image_backend_opt != 'sdl_image'
   add_project_arguments('-DHAVE_FREEIMAGE', language: ['c', 'cpp'])
   dependencies += [freeimage_dep]
 endif
@@ -98,7 +98,7 @@ sources = files(
   'src/comic_loaders.c',
   'src/comic_viewer.c',
   'src/edges.c',
-  'src/file_browser.c',
+  'src/file_browser_imgui.cpp',
   'src/image_loader.c',
   'src/image_processor.c',
   'src/main.c',

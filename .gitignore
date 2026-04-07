@@ -12,3 +12,8 @@ build.ninja
 rules.ninja
 temp_extract
 .idea/
+
+# AppImage artifacts
+AppDir/
+build-appimage/
+*.AppImage
