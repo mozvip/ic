@@ -1,9 +1,9 @@
 #include "clipboard.h"
 #include "image_loader.h"
+#include "temp_utils.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 #if defined(HAVE_FREEIMAGE)
 #include <FreeImage.h>
@@ -117,15 +117,12 @@ static void *save_png_freeimage(SDL_Surface *surface, size_t *out_size) {
 // Save PNG using SDL_Image backend (via temporary file)
 static void *save_png_sdl_image(SDL_Surface *surface, size_t *out_size) {
 #if defined(HAVE_SDL_IMAGE3)
-    // Create a temporary file for PNG
-    const char *temp_dir = "/tmp";
-    char temp_filename[256];
-    snprintf(temp_filename, sizeof(temp_filename), "%s/ic_clipboard_XXXXXX.png", temp_dir);
-
-    // For simplicity, we'll use a fixed temp filename with a PID-based unique suffix
-    static unsigned int temp_counter = 0;
-    snprintf(temp_filename, sizeof(temp_filename), "%s/ic_clipboard_%d_%u.png", 
-             temp_dir, getpid(), temp_counter++);
+    // Create a temporary file for PNG under the app preference path
+    char temp_filename[512];
+    if (!temp_utils_build_file_path(temp_filename, sizeof(temp_filename),
+                                    "ic_clipboard", ".png")) {
+        return NULL;
+    }
 
     // Save to temporary PNG file
     if (!IMG_SavePNG(surface, temp_filename)) {

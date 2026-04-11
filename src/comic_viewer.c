@@ -2116,6 +2116,7 @@ static ImageView* create_view_node_after(ImageView* prev_view) {
     // Initialize the view
     view->count = 1; // Default to one image per view
     view->crop_rect = (SDL_FRect){0, 0, 0, 0};
+    view->surface = NULL;
     view->next = NULL;
     view->prev = prev_view;
     view->texture = NULL;

@@ -107,6 +107,7 @@ sources = files(
   'src/progress_bar.c',
   'src/progress_indicator.c',
   'src/render.c',
+  'src/temp_utils.c',
   'src/upscale.c',
   'src/imgui_layer.cpp',
 )

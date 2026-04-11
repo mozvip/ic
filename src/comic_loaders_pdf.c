@@ -8,12 +8,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <unistd.h>
-#include <dirent.h>
 #include "comic_loaders.h"
 #include "pdf_backend.h"
+#include "temp_utils.h"
 
 /* ── Backend registry ─────────────────────────────────────────────── */
 
@@ -40,7 +37,30 @@ const char* pdf_backend_get_name(int type) {
 
 bool pdf_backend_is_available(int type) {
     const PdfBackendOps *ops = pdf_backend_get_ops(type);
-    return ops && ops->is_available && ops->is_available();
+    if (!ops || !ops->is_available) {
+        return false;
+    }
+
+    /*
+     * Availability probes may call external tools (for example poppler's
+     * pdfinfo). Cache the result so UI refreshes do not spawn child
+     * processes every frame.
+     */
+    static bool cache_initialized = false;
+    static signed char availability_cache[BACKEND_COUNT];
+
+    if (!cache_initialized) {
+        for (int i = 0; i < BACKEND_COUNT; i++) {
+            availability_cache[i] = -1;
+        }
+        cache_initialized = true;
+    }
+
+    if (availability_cache[type] < 0) {
+        availability_cache[type] = ops->is_available() ? 1 : 0;
+    }
+
+    return availability_cache[type] == 1;
 }
 
 /* ── Internal state stored in ArchiveHandle.archive_ptr ────────── */
@@ -56,11 +76,8 @@ ArchiveHandle* pdf_open(const char *path, int *total_images, ProgressCallback pr
     if (progress_cb) progress_cb(0.0f, "Creating temp folder...");
 
     /* Create temp directory. */
-    char temp_dir[256];
-    snprintf(temp_dir, sizeof(temp_dir), "/tmp/ic_viewer_pdf_XXXXXX");
-    if (mkdtemp(temp_dir) == NULL) {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-                     "Failed to create temporary directory");
+    char temp_dir[512];
+    if (!temp_utils_create_dir(temp_dir, sizeof(temp_dir), "ic_viewer_pdf_XXXXXX")) {
         if (progress_cb) progress_cb(1.0f, "Failed to create temporary directory");
         return NULL;
     }

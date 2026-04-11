@@ -1,12 +1,11 @@
 #include "upscale.h"
 #include "image_loader.h"
 #include "process_utils.h"
+#include "temp_utils.h"
 #include <SDL3/SDL.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-#include <time.h>
 
 #ifndef PATH_MAX
 #define PATH_MAX 4096
@@ -28,7 +27,9 @@ SDL_Surface* upscale(const char* input_path, int scale, const char* model, const
 
     // Create a unique temp output path
     char out_path[PATH_MAX];
-    snprintf(out_path, sizeof(out_path), "/tmp/ic_reup_%ld_%d.png", (long)time(NULL), (int)getpid());
+    if (!temp_utils_build_file_path(out_path, sizeof(out_path), "ic_reup", ".png")) {
+        return NULL;
+    }
 
     char scale_str[12];
     snprintf(scale_str, sizeof(scale_str), "%d", scale);
@@ -56,6 +57,6 @@ SDL_Surface* upscale(const char* input_path, int scale, const char* model, const
     }
 
     // delete the temp file after loading
-    unlink(out_path);
+    remove(out_path);
     return surface;
 }

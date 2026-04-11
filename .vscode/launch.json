@@ -11,7 +11,7 @@
             "program": "${workspaceFolder}/builddir/ic",
             "args": ["/mnt/homesrvpc/8t2/Calibre-BD/Unknown/Batman.et.Robin.Annee.Un.2025 (11062)/Batman.et.Robin.Annee.Un.2025 - Unknown.cbz"],
             "stopAtEntry": false,
-            "cwd": "${fileDirname}",
+            "cwd": "${workspaceFolder}",
             "environment": [],
             "externalConsole": false,
             "MIMode": "gdb",

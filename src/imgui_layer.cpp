@@ -277,6 +277,22 @@ static void imgui_layer_build_ui(void) {
         ImGui::Text("Zoom level: %.2f", viewer.zoom_level);
         ImGui::Text("Pan offset: (%.0f, %.0f)", viewer.pan_offset_x, viewer.pan_offset_y);
         ImGui::Text("Pan velocity: (%.0f, %.0f)", viewer.pan_velocity_x, viewer.pan_velocity_y);
+
+        ImGui::SeparatorText("Threads");
+        {
+            ImGui::TextUnformatted("Load Thread:");
+            ImGui::SameLine();
+            if (viewer.load_thread) {
+                SDL_ThreadState state = SDL_GetThreadState(viewer.load_thread);
+                if (state == SDL_THREAD_ALIVE) {
+                    ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.2f, 1.0f), "ALIVE");
+                } else {
+                    ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "UNKNOWN");
+                }
+            } else {
+                ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "IDLE");
+            }
+        }
     }
     ImGui::End();
 }

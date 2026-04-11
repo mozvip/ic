@@ -7,13 +7,12 @@
 #include "image_loader.h"
 #include "progress_bar.h"
 #include "process_utils.h"
+#include "temp_utils.h"
 #include <SDL3/SDL.h>
 #include <zip.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <dirent.h>
-#include <sys/stat.h>
 #include <unistd.h>
 #include <pthread.h>
 
@@ -55,10 +54,8 @@ ArchiveHandle* cbz_open(const char *path, int *total_images, ProgressCallback pr
     }
     
     // Create a temporary directory for extraction
-    char temp_dir[256];
-    snprintf(temp_dir, sizeof(temp_dir), "/tmp/ic_viewer_XXXXXX");
-    if (mkdtemp(temp_dir) == NULL) {
-        fprintf(stderr, "Failed to create temporary directory\n");
+    char temp_dir[512];
+    if (!temp_utils_create_dir(temp_dir, sizeof(temp_dir), "ic_viewer_XXXXXX")) {
         zip_close(zip_file);
         return NULL;
     }
