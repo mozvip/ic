@@ -2008,16 +2008,10 @@ static void view_changed(ImageView *old_view_node, ImageView *new_view_node) {
     
     // If we're switching away from the page being loaded, cancel the load thread
     // Invalidate the generation first so the worker knows to discard its work
-    if (viewer.load_thread) {
-        int old_gen = SDL_AddAtomicInt(&viewer.load_generation, 1);
-        SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION, "Generation incremented: %d -> %d", old_gen, old_gen + 1);
-        
+    if (viewer.load_thread && SDL_GetThreadState(viewer.load_thread) == SDL_THREAD_ALIVE) {
         // Wait for the thread to finish processing even with stale generation
         // This prevents use-after-free when worker accesses images being unloaded
-        if (SDL_GetThreadState(viewer.load_thread) == SDL_THREAD_ALIVE) {
-            SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION, "Waiting for stale load thread to finish");
-            SDL_WaitThread(viewer.load_thread, NULL);
-        }
+        SDL_WaitThread(viewer.load_thread, NULL);
         viewer.load_thread = NULL;
     }
     
