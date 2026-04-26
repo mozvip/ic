@@ -112,6 +112,9 @@ struct ViewerState {
     // Visual settings
     OverlayMode overlay_mode;      // Rendering mode for empty space
     SDL_ScaleMode scale_mode;      // Texture scaling mode (Linear/Nearest)
+    bool border_removal_enabled;   // Auto-trim white page borders
+    int border_white_threshold;    // RGB average threshold for white border detection (0-255)
+    int border_required_non_white; // Non-white samples needed to stop border scan
 
     // Multi-image display settings
     bool multiple_images_mode;     // Whether to display multiple images

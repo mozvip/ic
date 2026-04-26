@@ -127,6 +127,7 @@ Where `<comic-file-or-directory>` can be:
 - **Last Page**: End
 - **Toggle Fullscreen**: F12 or F key
 - **Cycle Overlay Mode**: O key
+- **Toggle Border Removal**: R key
 - **Cycle Color Filters**: X key (Gray World, Reduce Warm, Reduce Cool, Boost Contrast, Desaturate, Binarize, None)
 - **Exit Viewer**: Escape
 - **Navigate**: Mouse wheel scrolling

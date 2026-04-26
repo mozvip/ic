@@ -129,10 +129,11 @@ void viewer_display_info(void) {
             h = (int)viewer.current_view_node->texture->h;
         }
 
-        snprintf(info_text, sizeof(info_text), "%d / %d %s %s [%s] (%dx%d)",
+        snprintf(info_text, sizeof(info_text), "%d / %d %s %s %s [%s] (%dx%d)",
         viewer.current_view_index + 1, view_count,
         options ? (options->enhancement_enabled ? "[E+]" : "[E-]") : "[E-]",
         filter_str,
+        viewer.border_removal_enabled ? "[BR+]" : "[BR-]",
         overlay_str, w, h);
 
         SDL_Texture *text_texture = render_text_internal(info_text, (SDL_Color){255,255,255,255});

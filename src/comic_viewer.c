@@ -543,6 +543,9 @@ bool comic_viewer_init(int monitor_index) {
 
     // Initialize visual settings
     viewer.overlay_mode = OVERLAY_STRETCHED;
+    viewer.border_removal_enabled = true;
+    viewer.border_white_threshold = 240;
+    viewer.border_required_non_white = 3;
 
     // Initialize PDF backend (default to MuPDF)
     viewer.pdf_backend = PDF_BACKEND_MUPDF;
@@ -1342,6 +1345,21 @@ static void handle_events(void) {
                         }
                         break;
 
+                    case SDLK_R: // Toggle automatic white border removal
+                        {
+                            viewer.border_removal_enabled = !viewer.border_removal_enabled;
+
+                            snprintf(viewer.gamepad_status_msg,
+                                     sizeof(viewer.gamepad_status_msg),
+                                     "Border Removal: %s",
+                                     viewer.border_removal_enabled ? "On" : "Off");
+                            viewer.gamepad_status_until = SDL_GetTicks() + 1500;
+
+                            unload_view(viewer.current_view_node);
+                            load_view(viewer.current_view_node);
+                        }
+                        break;
+
                     case SDLK_X: // Cycle through color filters
                         {
                             // Cycle to next filter
@@ -1637,207 +1655,214 @@ static int load_view_surfaces_in_thread(void *data) {
         return cleanup_load_thread_resources(combined_surface);
     }    
 
-    // Detect and crop white borders
-    int left = 0, right = surface->w - 1;
-    int top = 0, bottom = surface->h - 1;
-    int threshold = 240; // Threshold for considering a pixel "white" (0-255)
-    int required_non_white = 3; // Number of non-white pixels required to stop scanning
-    
-    // Analyze pixels to detect borders
-    uint8_t *pixels = (uint8_t*)surface->pixels;
-    int pitch = surface->pitch;
-    const SDL_PixelFormatDetails *details = SDL_GetPixelFormatDetails(surface->format);
-    int bpp = details->bytes_per_pixel;
-
-    SDL_Palette *palette = SDL_GetSurfacePalette(surface);
-    if (bpp == 3 || bpp == 4) {
-        palette = NULL; // For 24/32-bit images, use the pixel format directly
-    } else {
-        palette = SDL_GetSurfacePalette(surface);
-    }
-
-    uint8_t *p;
-    // Scan from left edge inward
-    for (left = 0; left < surface->w / 2; left++) {
-        int non_white_count = 0;
+    SDL_FRect crop_rect = {0, 0, (float)surface->w, (float)surface->h};
+    if (viewer.border_removal_enabled) {
+        // Detect and crop white borders
+        int left = 0, right = surface->w - 1;
+        int top = 0, bottom = surface->h - 1;
+        int threshold = viewer.border_white_threshold;
+        int required_non_white = viewer.border_required_non_white;
+        if (threshold < 0) threshold = 0;
+        if (threshold > 255) threshold = 255;
+        if (required_non_white < 1) required_non_white = 1;
         
-        for (int y = 0; y < surface->h; y += 2) { // Sample every other pixel for speed
-            uint32_t pixel = 0;
-            p = pixels + y * pitch + left * bpp;
+        // Analyze pixels to detect borders
+        uint8_t *pixels = (uint8_t*)surface->pixels;
+        int pitch = surface->pitch;
+        const SDL_PixelFormatDetails *details = SDL_GetPixelFormatDetails(surface->format);
+        int bpp = details->bytes_per_pixel;
+
+        SDL_Palette *palette = SDL_GetSurfacePalette(surface);
+        if (bpp == 3 || bpp == 4) {
+            palette = NULL; // For 24/32-bit images, use the pixel format directly
+        } else {
+            palette = SDL_GetSurfacePalette(surface);
+        }
+
+        uint8_t *p;
+        // Scan from left edge inward
+        for (left = 0; left < surface->w / 2; left++) {
+            int non_white_count = 0;
             
-            uint8_t r, g, b, a;
-
-            if (!palette) {
-                #if SDL_BYTEORDER == SDL_BIG_ENDIAN
-                    r = p[0] << 16;
-                    g = p[1] << 8;
-                    b = p[2];
-                #else
-                    r = p[0]; g = p[1]; b = p[2];
-                #endif
-            } else {
-                switch (bpp) {
-                    case 1: pixel = *p; break;
-                    case 2: pixel = *(uint16_t*)p; break;
-                }
-                SDL_GetRGBA(pixel, details, palette, &r, &g, &b, &a);
-            }
-           
-            // If pixel is not "white" (using average of RGB values)
-            int avg = (r + g + b) / 3;
-            if (avg < threshold) {
-                non_white_count++;
-                if (non_white_count >= required_non_white) {
-                    break;
-                }
-            }
-        }
-        
-        if (non_white_count >= required_non_white) {
-            break; // Found non-white content
-        }
-    }
-
-    if (generation != SDL_GetAtomicInt(&viewer.load_generation)) {
-        return cleanup_load_thread_resources(combined_surface);
-    }
-    
-    // Scan from right edge inward
-    for (right = surface->w - 1; right > left + 100; right--) { // Ensure min width
-        int non_white_count = 0;
-        
-        for (int y = 0; y < surface->h; y += 2) {
-            uint32_t pixel = 0;
-            p = pixels + y * pitch + right * bpp;
-            
-            uint8_t r, g, b, a;
-
-            if (!palette) {
-                #if SDL_BYTEORDER == SDL_BIG_ENDIAN
-                    r = p[0] << 16;
-                    g = p[1] << 8;
-                    b = p[2];
-                #else
-                    r = p[0]; g = p[1]; b = p[2];
-                #endif
-            } else {
-                switch (bpp) {
-                    case 1: pixel = *p; break;
-                    case 2: pixel = *(uint16_t*)p; break;
-                }
-                SDL_GetRGBA(pixel, details, palette, &r, &g, &b, &a);
-            }
-           
-            // If pixel is not "white" (using average of RGB values)           
-            int avg = (r + g + b) / 3;
-            if (avg < threshold) {
-                non_white_count++;
-                if (non_white_count >= required_non_white) {
-                    break;
-                }
-            }
-        }
-        
-        if (non_white_count >= required_non_white) {
-            break; // Found non-white content
-        }
-    }
-
-    if (generation != SDL_GetAtomicInt(&viewer.load_generation)) {
-        return cleanup_load_thread_resources(combined_surface);
-    }
-    
-    // Scan from top edge down
-    for (top = 0; top < surface->h - 50; top++) {
-        int non_white_count = 0;
-        
-        for (int x = left; x <= right; x += 2) {
-            uint32_t pixel = 0;
-            
-            uint8_t r, g, b, a;
-
-            p = pixels + top * pitch + x * bpp;
-
-            if (!palette) {
-                #if SDL_BYTEORDER == SDL_BIG_ENDIAN
-                    r = p[0] << 16;
-                    g = p[1] << 8;
-                    b = p[2];
-                #else
-                    r = p[0]; g = p[1]; b = p[2];
-                #endif
-            } else {
-                switch (bpp) {
-                    case 1: pixel = *p; break;
-                    case 2: pixel = *(uint16_t*)p; break;
-                }
-                SDL_GetRGBA(pixel, details, palette, &r, &g, &b, &a);
-            }
-            
-            int avg = (r + g + b) / 3;
-            if (avg < threshold) {
-                non_white_count++;
-                if (non_white_count >= required_non_white) {
-                    break;
-                }
-            }
-        }
-        
-        if (non_white_count >= required_non_white) {
-            break; // Found non-white content
-        }
-    }
-
-    if (generation != SDL_GetAtomicInt(&viewer.load_generation)) {
-        return cleanup_load_thread_resources(combined_surface);
-    }
-    
-    // Scan from bottom edge up
-    for (bottom = surface->h - 1; bottom > top + 100; bottom--) { // Ensure min height
-        int non_white_count = 0;
-
-        for (int x = left; x <= right; x += 2) {
-                   
-            uint8_t r, g, b, a;
-
-            p = pixels + bottom * pitch + x * bpp;
-
-            if (!palette) {
-                #if SDL_BYTEORDER == SDL_BIG_ENDIAN
-                    r = p[0] << 16;
-                    g = p[1] << 8;
-                    b = p[2];
-                #else
-                    r = p[0]; g = p[1]; b = p[2];
-                #endif
-            } else {
+            for (int y = 0; y < surface->h; y += 2) { // Sample every other pixel for speed
                 uint32_t pixel = 0;
-                switch (bpp) {
-                    case 1: pixel = *p; break;
-                    case 2: pixel = *(uint16_t*)p; break;
+                p = pixels + y * pitch + left * bpp;
+                
+                uint8_t r, g, b, a;
+
+                if (!palette) {
+                    #if SDL_BYTEORDER == SDL_BIG_ENDIAN
+                        r = p[0] << 16;
+                        g = p[1] << 8;
+                        b = p[2];
+                    #else
+                        r = p[0]; g = p[1]; b = p[2];
+                    #endif
+                } else {
+                    switch (bpp) {
+                        case 1: pixel = *p; break;
+                        case 2: pixel = *(uint16_t*)p; break;
+                    }
+                    SDL_GetRGBA(pixel, details, palette, &r, &g, &b, &a);
                 }
-                SDL_GetRGBA(pixel, details, palette, &r, &g, &b, &a);
+               
+                // If pixel is not "white" (using average of RGB values)
+                int avg = (r + g + b) / 3;
+                if (avg < threshold) {
+                    non_white_count++;
+                    if (non_white_count >= required_non_white) {
+                        break;
+                    }
+                }
             }
             
-            int avg = (r + g + b) / 3;
-            if (avg < threshold) {
-                non_white_count++;
-                if (non_white_count >= required_non_white) {
-                    break;
-                }
+            if (non_white_count >= required_non_white) {
+                break; // Found non-white content
             }
         }
-        
-        if (non_white_count >= required_non_white) {
-            break; // Found non-white content
+
+        if (generation != SDL_GetAtomicInt(&viewer.load_generation)) {
+            return cleanup_load_thread_resources(combined_surface);
         }
+        
+        // Scan from right edge inward
+        for (right = surface->w - 1; right > left + 100; right--) { // Ensure min width
+            int non_white_count = 0;
+            
+            for (int y = 0; y < surface->h; y += 2) {
+                uint32_t pixel = 0;
+                p = pixels + y * pitch + right * bpp;
+                
+                uint8_t r, g, b, a;
+
+                if (!palette) {
+                    #if SDL_BYTEORDER == SDL_BIG_ENDIAN
+                        r = p[0] << 16;
+                        g = p[1] << 8;
+                        b = p[2];
+                    #else
+                        r = p[0]; g = p[1]; b = p[2];
+                    #endif
+                } else {
+                    switch (bpp) {
+                        case 1: pixel = *p; break;
+                        case 2: pixel = *(uint16_t*)p; break;
+                    }
+                    SDL_GetRGBA(pixel, details, palette, &r, &g, &b, &a);
+                }
+               
+                // If pixel is not "white" (using average of RGB values)           
+                int avg = (r + g + b) / 3;
+                if (avg < threshold) {
+                    non_white_count++;
+                    if (non_white_count >= required_non_white) {
+                        break;
+                    }
+                }
+            }
+            
+            if (non_white_count >= required_non_white) {
+                break; // Found non-white content
+            }
+        }
+
+        if (generation != SDL_GetAtomicInt(&viewer.load_generation)) {
+            return cleanup_load_thread_resources(combined_surface);
+        }
+        
+        // Scan from top edge down
+        for (top = 0; top < surface->h - 50; top++) {
+            int non_white_count = 0;
+            
+            for (int x = left; x <= right; x += 2) {
+                uint32_t pixel = 0;
+                
+                uint8_t r, g, b, a;
+
+                p = pixels + top * pitch + x * bpp;
+
+                if (!palette) {
+                    #if SDL_BYTEORDER == SDL_BIG_ENDIAN
+                        r = p[0] << 16;
+                        g = p[1] << 8;
+                        b = p[2];
+                    #else
+                        r = p[0]; g = p[1]; b = p[2];
+                    #endif
+                } else {
+                    switch (bpp) {
+                        case 1: pixel = *p; break;
+                        case 2: pixel = *(uint16_t*)p; break;
+                    }
+                    SDL_GetRGBA(pixel, details, palette, &r, &g, &b, &a);
+                }
+                
+                int avg = (r + g + b) / 3;
+                if (avg < threshold) {
+                    non_white_count++;
+                    if (non_white_count >= required_non_white) {
+                        break;
+                    }
+                }
+            }
+            
+            if (non_white_count >= required_non_white) {
+                break; // Found non-white content
+            }
+        }
+
+        if (generation != SDL_GetAtomicInt(&viewer.load_generation)) {
+            return cleanup_load_thread_resources(combined_surface);
+        }
+        
+        // Scan from bottom edge up
+        for (bottom = surface->h - 1; bottom > top + 100; bottom--) { // Ensure min height
+            int non_white_count = 0;
+
+            for (int x = left; x <= right; x += 2) {
+                       
+                uint8_t r, g, b, a;
+
+                p = pixels + bottom * pitch + x * bpp;
+
+                if (!palette) {
+                    #if SDL_BYTEORDER == SDL_BIG_ENDIAN
+                        r = p[0] << 16;
+                        g = p[1] << 8;
+                        b = p[2];
+                    #else
+                        r = p[0]; g = p[1]; b = p[2];
+                    #endif
+                } else {
+                    uint32_t pixel = 0;
+                    switch (bpp) {
+                        case 1: pixel = *p; break;
+                        case 2: pixel = *(uint16_t*)p; break;
+                    }
+                    SDL_GetRGBA(pixel, details, palette, &r, &g, &b, &a);
+                }
+                
+                int avg = (r + g + b) / 3;
+                if (avg < threshold) {
+                    non_white_count++;
+                    if (non_white_count >= required_non_white) {
+                        break;
+                    }
+                }
+            }
+            
+            if (non_white_count >= required_non_white) {
+                break; // Found non-white content
+            }
+        }
+
+        if (generation != SDL_GetAtomicInt(&viewer.load_generation)) {
+            return cleanup_load_thread_resources(combined_surface);
+        }
+
+        crop_rect = (SDL_FRect){left, top, right - left + 1, bottom - top + 1};
     }
 
-    if (generation != SDL_GetAtomicInt(&viewer.load_generation)) {
-        return cleanup_load_thread_resources(combined_surface);
-    }
-
-    SDL_FRect crop_rect = {left, top, right - left + 1, bottom - top + 1};
     if (crop_rect.w <= 0 || crop_rect.h <= 0) {
         // reset crop rect to full image size
         crop_rect.x = 0;

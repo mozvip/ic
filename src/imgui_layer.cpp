@@ -195,6 +195,51 @@ static void imgui_layer_build_ui(void) {
             }
         }
 
+        ImGui::SeparatorText("Border Removal");
+        {
+            bool border_removal_enabled = viewer.border_removal_enabled;
+            if (ImGui::Checkbox("Enable Auto Border Removal", &border_removal_enabled)) {
+                viewer.border_removal_enabled = border_removal_enabled;
+                comic_viewer_reload_current_view();
+                viewer.last_page_change_time = SDL_GetTicks();
+                imgui_layer_set_status_message(border_removal_enabled ?
+                    "Border removal enabled" :
+                    "Border removal disabled");
+            }
+
+            ImGui::BeginDisabled(!viewer.border_removal_enabled);
+
+            int border_white_threshold = viewer.border_white_threshold;
+            bool border_threshold_changed = ImGui::SliderInt("White Threshold", &border_white_threshold, 0, 255);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("RGB average above this value is considered background (default: 240)");
+            if (border_threshold_changed)
+                viewer.border_white_threshold = border_white_threshold;
+
+            int border_required_non_white = viewer.border_required_non_white;
+            bool border_samples_changed = ImGui::SliderInt("Content Samples", &border_required_non_white, 1, 32);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Number of non-background pixels needed to stop scanning (default: 3)");
+            if (border_samples_changed)
+                viewer.border_required_non_white = border_required_non_white;
+
+            if (border_threshold_changed || border_samples_changed) {
+                comic_viewer_reload_current_view();
+                viewer.last_page_change_time = SDL_GetTicks();
+                imgui_layer_set_status_message("Border removal thresholds updated");
+            }
+
+            if (ImGui::Button("Reset to Defaults")) {
+                viewer.border_white_threshold = 240;
+                viewer.border_required_non_white = 3;
+                comic_viewer_reload_current_view();
+                viewer.last_page_change_time = SDL_GetTicks();
+                imgui_layer_set_status_message("Border removal thresholds reset");
+            }
+
+            ImGui::EndDisabled();
+        }
+
         ImGui::SeparatorText("Image Backend");
         {
             int selected = (int)image_loader_get_active_backend();
