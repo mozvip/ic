@@ -12,6 +12,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -25,11 +26,20 @@ typedef struct FileBrowserState {
     char current_path[PATH_MAX];
     std::vector<std::string> entries;
     std::vector<int> is_dir;
+    std::vector<long long> size_bytes;
     int selected;
     bool scroll_to_selected;
+    int view_mode;
 } FileBrowserState;
 
 static FileBrowserState fb = {};
+
+enum FbViewMode {
+    FB_VIEW_LIST = 0,
+    FB_VIEW_COMPACT = 1,
+    FB_VIEW_GRID = 2,
+    FB_VIEW_COUNT = 3,
+};
 
 static char fb_last_path[PATH_MAX] = "";
 static int fb_last_selected = 0;
@@ -59,9 +69,47 @@ static bool fb_is_supported(const char *name) {
            strcasecmp(dot, "pdf") == 0 || is_image_file(name);
 }
 
+static const char *fb_view_mode_name(int mode) {
+    switch (mode) {
+    case FB_VIEW_COMPACT:
+        return "Compact";
+    case FB_VIEW_GRID:
+        return "Grid";
+    case FB_VIEW_LIST:
+    default:
+        return "List";
+    }
+}
+
+static void fb_format_size(long long bytes, char *out, size_t out_size) {
+    if (!out || out_size == 0) {
+        return;
+    }
+
+    if (bytes < 0) {
+        out[0] = '\0';
+        return;
+    }
+
+    static const char *units[] = {"B", "KB", "MB", "GB", "TB"};
+    double size = (double)bytes;
+    int unit = 0;
+    while (size >= 1024.0 && unit < 4) {
+        size /= 1024.0;
+        unit++;
+    }
+
+    if (unit == 0) {
+        snprintf(out, out_size, "%lld %s", bytes, units[unit]);
+    } else {
+        snprintf(out, out_size, "%.1f %s", size, units[unit]);
+    }
+}
+
 static void fb_scan(void) {
     fb.entries.clear();
     fb.is_dir.clear();
+    fb.size_bytes.clear();
 
     DIR *d = opendir(fb.current_path);
     if (!d) {
@@ -70,9 +118,11 @@ static void fb_scan(void) {
 
     std::vector<std::string> names;
     std::vector<int> dirs;
+    std::vector<long long> sizes;
 
     names.emplace_back("..");
     dirs.push_back(1);
+    sizes.push_back(-1);
 
     struct dirent *ent = nullptr;
     while ((ent = readdir(d)) != nullptr) {
@@ -95,6 +145,7 @@ static void fb_scan(void) {
         if (S_ISDIR(st.st_mode) || fb_is_supported(ent->d_name)) {
             names.emplace_back(ent->d_name);
             dirs.push_back(S_ISDIR(st.st_mode) ? 1 : 0);
+            sizes.push_back(S_ISDIR(st.st_mode) ? -1 : (long long)st.st_size);
         }
     }
 
@@ -114,9 +165,11 @@ static void fb_scan(void) {
 
     fb.entries.reserve(idx.size());
     fb.is_dir.reserve(idx.size());
+    fb.size_bytes.reserve(idx.size());
     for (int i : idx) {
         fb.entries.push_back(names[(size_t)i]);
         fb.is_dir.push_back(dirs[(size_t)i]);
+        fb.size_bytes.push_back(sizes[(size_t)i]);
     }
 
     fb.selected = 0;
@@ -138,6 +191,11 @@ extern "C" void file_browser_open(const char *path) {
 
     fb.current_path[sizeof(fb.current_path) - 1] = '\0';
     fb.active = true;
+
+    if (fb.view_mode < FB_VIEW_LIST || fb.view_mode >= FB_VIEW_COUNT) {
+        fb.view_mode = FB_VIEW_LIST;
+    }
+
     fb_scan();
 
     if (fb_have_last && !fb.entries.empty()) {
@@ -160,6 +218,7 @@ extern "C" void file_browser_close(void) {
 
     fb.entries.clear();
     fb.is_dir.clear();
+    fb.size_bytes.clear();
     fb.selected = 0;
     fb.scroll_to_selected = false;
 }
@@ -309,14 +368,12 @@ extern "C" void file_browser_render(void) {
         return;
     }
 
-    ImGuiIO &io = ImGui::GetIO();
-    const ImVec2 display = io.DisplaySize;
-
-    ImGui::SetNextWindowPos(ImVec2(display.x * 0.5f, display.y * 0.5f), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(display.x * 0.85f, display.y * 0.8f), ImGuiCond_Appearing);
+    ImGuiViewport *viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(viewport->Pos, ImGuiCond_Always);
+    ImGui::SetNextWindowSize(viewport->Size, ImGuiCond_Always);
 
     bool keep_open = true;
-    ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse;
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize;
 
     if (!ImGui::Begin("Open Comic", &keep_open, flags)) {
         ImGui::End();
@@ -338,20 +395,63 @@ extern "C" void file_browser_render(void) {
     ImGui::TextWrapped("Path: %s", fb.current_path);
     ImGui::Spacing();
 
-    const float footer_height = ImGui::GetFrameHeightWithSpacing() * 2.2f;
-    ImGui::BeginChild("##browser_entries", ImVec2(0.0f, -footer_height), true, ImGuiWindowFlags_NavFlattened);
+    const float footer_height = ImGui::GetFrameHeightWithSpacing() * 3.2f;
+    ImGui::BeginChild("##browser_entries", ImVec2(0.0f, -footer_height), true, ImGuiWindowFlags_NoNav);
 
     bool activated = false;
     bool moved_selection = false;
+    int grid_columns = 1;
+
+    if (fb.view_mode == FB_VIEW_GRID) {
+        ImVec2 avail = ImGui::GetContentRegionAvail();
+        const ImGuiStyle &style = ImGui::GetStyle();
+        const float tile_width = 220.0f;
+        float slot = tile_width + style.ItemSpacing.x;
+        if (slot < 1.0f) {
+            slot = 1.0f;
+        }
+        grid_columns = (int)((avail.x + style.ItemSpacing.x) / slot);
+        if (grid_columns < 1) {
+            grid_columns = 1;
+        }
+    }
 
     if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) {
-        if (ImGui::IsKeyPressed(ImGuiKey_UpArrow) && fb.selected > 0) {
-            fb.selected--;
-            moved_selection = true;
+        if (ImGui::IsKeyPressed(ImGuiKey_V)) {
+            fb.view_mode = (fb.view_mode + 1) % FB_VIEW_COUNT;
         }
-        if (ImGui::IsKeyPressed(ImGuiKey_DownArrow) && fb.selected + 1 < (int)fb.entries.size()) {
-            fb.selected++;
-            moved_selection = true;
+        if (fb.view_mode == FB_VIEW_GRID) {
+            if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow) && fb.selected > 0) {
+                fb.selected--;
+                moved_selection = true;
+            }
+            if (ImGui::IsKeyPressed(ImGuiKey_RightArrow) && fb.selected + 1 < (int)fb.entries.size()) {
+                fb.selected++;
+                moved_selection = true;
+            }
+            if (ImGui::IsKeyPressed(ImGuiKey_UpArrow) && fb.selected > 0) {
+                fb.selected -= grid_columns;
+                if (fb.selected < 0) {
+                    fb.selected = 0;
+                }
+                moved_selection = true;
+            }
+            if (ImGui::IsKeyPressed(ImGuiKey_DownArrow) && fb.selected + 1 < (int)fb.entries.size()) {
+                fb.selected += grid_columns;
+                if (fb.selected >= (int)fb.entries.size()) {
+                    fb.selected = (int)fb.entries.size() - 1;
+                }
+                moved_selection = true;
+            }
+        } else {
+            if (ImGui::IsKeyPressed(ImGuiKey_UpArrow) && fb.selected > 0) {
+                fb.selected--;
+                moved_selection = true;
+            }
+            if (ImGui::IsKeyPressed(ImGuiKey_DownArrow) && fb.selected + 1 < (int)fb.entries.size()) {
+                fb.selected++;
+                moved_selection = true;
+            }
         }
         if (ImGui::IsKeyPressed(ImGuiKey_Home) && !fb.entries.empty()) {
             fb.selected = 0;
@@ -362,9 +462,16 @@ extern "C" void file_browser_render(void) {
             moved_selection = true;
         }
         if (ImGui::IsKeyPressed(ImGuiKey_PageUp) && !fb.entries.empty()) {
-            int visible = (int)(ImGui::GetWindowHeight() / ImGui::GetTextLineHeightWithSpacing());
+            float row_height = ImGui::GetTextLineHeightWithSpacing();
+            if (fb.view_mode == FB_VIEW_GRID) {
+                row_height = ImGui::GetFrameHeightWithSpacing() * 1.5f;
+            }
+            int visible = (int)(ImGui::GetWindowHeight() / row_height);
             if (visible < 1) {
                 visible = 1;
+            }
+            if (fb.view_mode == FB_VIEW_GRID) {
+                visible *= grid_columns;
             }
             fb.selected -= visible;
             if (fb.selected < 0) {
@@ -373,9 +480,16 @@ extern "C" void file_browser_render(void) {
             moved_selection = true;
         }
         if (ImGui::IsKeyPressed(ImGuiKey_PageDown) && !fb.entries.empty()) {
-            int visible = (int)(ImGui::GetWindowHeight() / ImGui::GetTextLineHeightWithSpacing());
+            float row_height = ImGui::GetTextLineHeightWithSpacing();
+            if (fb.view_mode == FB_VIEW_GRID) {
+                row_height = ImGui::GetFrameHeightWithSpacing() * 1.5f;
+            }
+            int visible = (int)(ImGui::GetWindowHeight() / row_height);
             if (visible < 1) {
                 visible = 1;
+            }
+            if (fb.view_mode == FB_VIEW_GRID) {
+                visible *= grid_columns;
             }
             fb.selected += visible;
             if (fb.selected >= (int)fb.entries.size()) {
@@ -403,26 +517,55 @@ extern "C" void file_browser_render(void) {
     }
 
     for (int i = 0; i < (int)fb.entries.size(); i++) {
-        std::string label = fb.entries[(size_t)i];
-        if (fb.is_dir[(size_t)i]) {
-            label += "/";
+        std::string label;
+        if (fb.view_mode == FB_VIEW_GRID) {
+            label = fb.is_dir[(size_t)i] ? "[DIR] " : "[FILE] ";
+            label += fb.entries[(size_t)i];
+        } else if (fb.view_mode == FB_VIEW_COMPACT) {
+            label = fb.is_dir[(size_t)i] ? "D  " : "F  ";
+            label += fb.entries[(size_t)i];
+        } else {
+            label = fb.entries[(size_t)i];
+            if (fb.is_dir[(size_t)i]) {
+                label += "/";
+            } else {
+                char size_text[32];
+                fb_format_size(fb.size_bytes[(size_t)i], size_text, sizeof(size_text));
+                if (size_text[0] != '\0') {
+                    label += " (";
+                    label += size_text;
+                    label += ")";
+                }
+            }
         }
 
         bool selected = (i == fb.selected);
         ImGuiSelectableFlags selectable_flags = ImGuiSelectableFlags_AllowDoubleClick;
 
-        if (ImGui::Selectable(label.c_str(), selected, selectable_flags)) {
-            fb.selected = i;
-            if (ImGui::IsMouseDoubleClicked(0)) {
-                activated = true;
+        if (fb.view_mode == FB_VIEW_GRID) {
+            if (i > 0 && (i % grid_columns) != 0) {
+                ImGui::SameLine();
+            }
+            if (ImGui::Selectable(label.c_str(), selected, selectable_flags, ImVec2(220.0f, 0.0f))) {
+                fb.selected = i;
+                if (ImGui::IsMouseDoubleClicked(0)) {
+                    activated = true;
+                }
+            }
+        } else {
+            if (ImGui::Selectable(label.c_str(), selected, selectable_flags)) {
+                fb.selected = i;
+                if (ImGui::IsMouseDoubleClicked(0)) {
+                    activated = true;
+                }
             }
         }
 
         if (selected) {
             if (fb.scroll_to_selected) {
                 ImGui::SetScrollHereY(0.5f);
+                ImGui::SetItemDefaultFocus();
             }
-            ImGui::SetItemDefaultFocus();
         }
     }
 
@@ -438,6 +581,21 @@ extern "C" void file_browser_render(void) {
         ImGui::End();
         return;
     }
+
+    if (ImGui::Button("List")) {
+        fb.view_mode = FB_VIEW_LIST;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Compact")) {
+        fb.view_mode = FB_VIEW_COMPACT;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Grid")) {
+        fb.view_mode = FB_VIEW_GRID;
+    }
+
+    ImGui::SameLine();
+    ImGui::TextDisabled("Mode: %s (V to cycle)", fb_view_mode_name(fb.view_mode));
 
     if (ImGui::Button("Open") && !fb.entries.empty()) {
         fb_activate_selected();

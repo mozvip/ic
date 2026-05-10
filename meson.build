@@ -23,7 +23,10 @@ add_project_arguments('-D_DEFAULT_SOURCE', language: 'c')
 
 # Dependencies
 sdl3_dep = dependency('sdl3', required: true)
-sdl3_image_dep = dependency('SDL3_image', required: false)
+sdl3_image_dep = dependency('SDL3_image', required: false, method: 'pkg-config')
+if not sdl3_image_dep.found()
+  sdl3_image_dep = cc.find_library('SDL3_image', required: false)
+endif
 sdl3_ttf_dep = dependency('SDL3_ttf', required: true)
 libzip_dep = dependency('libzip', required: true)
 

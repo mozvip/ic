@@ -126,7 +126,7 @@ static void *save_png_sdl_image(SDL_Surface *surface, size_t *out_size) {
 
     // Save to temporary PNG file
     if (!IMG_SavePNG(surface, temp_filename)) {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, 
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                      "Failed to save PNG to temporary file via SDL_Image: %s\n", SDL_GetError());
         return NULL;
     }

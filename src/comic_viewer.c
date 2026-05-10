@@ -902,6 +902,7 @@ static void handle_events(void) {
     
     while (SDL_PollEvent(&event)) {
         imgui_layer_process_event(&event);
+        bool browser_active = file_browser_is_active();
         switch (event.type) {
                 case SDL_EVENT_USER: {
                     // Handle surface loading completion events
@@ -932,6 +933,9 @@ static void handle_events(void) {
                 break;
 
             case SDL_EVENT_MOUSE_WHEEL:
+                if (browser_active) {
+                    break;
+                }
                 if (imgui_layer_is_visible() && imgui_layer_wants_capture_mouse()) {
                     break;
                 }
@@ -946,6 +950,9 @@ static void handle_events(void) {
             
 
             case SDL_EVENT_MOUSE_BUTTON_DOWN:
+                if (browser_active) {
+                    break;
+                }
                 if (imgui_layer_is_visible() && imgui_layer_wants_capture_mouse()) {
                     break;
                 }
@@ -975,6 +982,9 @@ static void handle_events(void) {
                 }
                 break;
             case SDL_EVENT_MOUSE_MOTION:
+                if (browser_active) {
+                    break;
+                }
                 if (imgui_layer_is_visible() && imgui_layer_wants_capture_mouse()) {
                     break;
                 }
@@ -985,6 +995,9 @@ static void handle_events(void) {
                 }
                 break;
             case SDL_EVENT_MOUSE_BUTTON_UP:
+                if (browser_active) {
+                    break;
+                }
                 if (imgui_layer_is_visible() && imgui_layer_wants_capture_mouse()) {
                     break;
                 }
@@ -996,6 +1009,9 @@ static void handle_events(void) {
                 break;
 
             case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+                if (browser_active) {
+                    break;
+                }
                 // Map left/right shoulder to page navigation
                 if (event.gbutton.button == SDL_GAMEPAD_BUTTON_LEFT_SHOULDER) {
                     go_to_previous_view();
@@ -1037,6 +1053,11 @@ static void handle_events(void) {
             break;
                 
             case SDL_EVENT_KEY_DOWN:
+                if (browser_active) {
+                    // Keep browser-only key handling isolated while overlay is open.
+                    file_browser_handle_key(event.key.key);
+                    break;
+                }
                 if (event.key.key == SDLK_F1 || event.key.scancode == SDL_SCANCODE_F1) {
                     if (!imgui_layer_is_initialized()) {
                         snprintf(viewer.gamepad_status_msg, sizeof(viewer.gamepad_status_msg), "ImGui overlay unavailable");
@@ -1049,14 +1070,6 @@ static void handle_events(void) {
                     }
                     break;
                 }
-                // If file browser active, delegate keys first (except we allow ESC handled inside)
-                if (file_browser_is_active()) {
-                    file_browser_handle_key(event.key.key);
-                    if (file_browser_is_active() || event.key.key == SDLK_RETURN || event.key.key == SDLK_KP_ENTER) {
-                        break;
-                    }
-                }
-
                 if (imgui_layer_is_visible() && imgui_layer_wants_capture_keyboard()) {
                     break;
                 }
@@ -1463,7 +1476,7 @@ static void handle_events(void) {
 }
 
 static void update_state(void) {
-    if (!viewer.zoomed) {
+    if (!viewer.zoomed || file_browser_is_active()) {
         // Reset velocities when not zoomed
         viewer.pan_velocity_x = 0.0f;
         viewer.pan_velocity_y = 0.0f;
