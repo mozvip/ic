@@ -44,6 +44,10 @@ enum FbViewMode {
 static char fb_last_path[PATH_MAX] = "";
 static int fb_last_selected = 0;
 static bool fb_have_last = false;
+// The keypress that opens the browser is still in ImGui's input state for the
+// frame the browser first renders in. Set on open, cleared once that key is
+// released, so the opening Enter cannot immediately activate the selection.
+static bool fb_ignore_activate = false;
 
 static void fb_normalize_path(char *p) {
     if (!p || !*p) {
@@ -191,6 +195,7 @@ extern "C" void file_browser_open(const char *path) {
 
     fb.current_path[sizeof(fb.current_path) - 1] = '\0';
     fb.active = true;
+    fb_ignore_activate = true;
 
     if (fb.view_mode < FB_VIEW_LIST || fb.view_mode >= FB_VIEW_COUNT) {
         fb.view_mode = FB_VIEW_LIST;
@@ -507,7 +512,15 @@ extern "C" void file_browser_render(void) {
             }
             fb_go_up_and_select_child(child);
         }
-        if (ImGui::IsKeyPressed(ImGuiKey_Enter)) {
+        if (fb_ignore_activate) {
+            // Swallow the Enter that opened the browser: activating on it would
+            // re-open the entry restored into fb.selected and close the browser
+            // again in the same frame.
+            if (!ImGui::IsKeyDown(ImGuiKey_Enter) && !ImGui::IsKeyDown(ImGuiKey_KeypadEnter)) {
+                fb_ignore_activate = false;
+            }
+        } else if (ImGui::IsKeyPressed(ImGuiKey_Enter) ||
+                   ImGui::IsKeyPressed(ImGuiKey_KeypadEnter)) {
             activated = true;
         }
     }

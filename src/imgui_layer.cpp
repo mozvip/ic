@@ -5,6 +5,7 @@
 #include <SDL3/SDL.h>
 
 #include "comic_viewer.h"
+#include "file_browser.h"
 #include "image_loader.h"
 #include "image_processor.h"
 #include "pdf_backend.h"
@@ -233,6 +234,14 @@ static void imgui_layer_build_ui(void) {
             ImGui::PopStyleVar(3);
         }
     }
+
+    // The file browser owns the whole screen and the whole input focus while it
+    // is open: suppress the viewer's own panels so none of their controls can
+    // be clicked underneath it. Their visibility flags are left untouched, so
+    // whatever was open reappears once the browser closes. The status message
+    // above is exempt - it is click-through and is what explains why the
+    // browser opened in the first place.
+    if (file_browser_is_active()) return;
 
     // The image-info overlay is independent from the F1 settings window.
     imgui_layer_build_exif_ui();
