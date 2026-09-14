@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(meson compile *)",
+      "Bash(ninja clean *)",
+      "Bash(ninja)",
+      "Bash(find /usr/include -name \"SDL_gpu*.h\" 2>/dev/null | head; find /usr/include -name \"SDL_render.h\" 2>/dev/null | head)",
+      "Read(//usr/include/**)",
+      "Bash(pkg-config --exists shaderc)",
+      "Bash(pkg-config --exists SDL3_shadercross)",
+      "Bash(meson setup *)",
+      "Bash(timeout 3 ./builddir/ic /tmp)"
+    ]
+  }
+}

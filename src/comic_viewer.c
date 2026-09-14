@@ -10,6 +10,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <limits.h>
 #include <math.h>
 #include <SDL3/SDL.h>
 #include <SDL3_ttf/SDL_ttf.h>
@@ -17,6 +18,7 @@
 
 #include "comic_viewer.h"
 #include "comic_loaders.h"
+#include "pdf_backend.h"
 #include "progress_bar.h"
 #include "progress_indicator.h" // Moved here
 #include "image_loader.h"
@@ -24,6 +26,7 @@
 // Rendering module (viewer_display_info, viewer_render_current_view, viewer_render_text)
 #include "render.h"
 #include "imgui_layer.h"
+#include "gpu_shader.h"
 
 SDL_Color white = {255, 255, 255, 255}; // White
 
@@ -482,6 +485,10 @@ bool comic_viewer_init(int monitor_index) {
     if (!imgui_layer_init(viewer.window, viewer.renderer)) {
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Warning: Failed to initialize ImGui overlay");
     }
+
+    if (!gpu_shader_init(viewer.renderer)) {
+        SDL_Log("GPU pixel shaders unavailable, using CPU fallback");
+    }
     
     // Initialize the progress bar
     if (!progress_bar_init(viewer.renderer)) {
@@ -546,9 +553,12 @@ bool comic_viewer_init(int monitor_index) {
     viewer.border_removal_enabled = true;
     viewer.border_white_threshold = 240;
     viewer.border_required_non_white = 3;
+    viewer.overlay_pixel_shader = PIXEL_SHADER_SCANLINES;
+    viewer.view_pixel_shader = PIXEL_SHADER_NONE;
 
     // Initialize PDF backend (default to MuPDF)
     viewer.pdf_backend = PDF_BACKEND_MUPDF;
+    viewer.pdf_dpi = PDF_DEFAULT_DPI;
 
     // Initialize zoom settings
     viewer.zoom_level = 1.0f;
@@ -699,8 +709,46 @@ bool comic_viewer_load_and_display(const char *path_to_folder, const char *image
     return true;
 }
 
+// Split a single image file path into the folder that holds it and the image's
+// own path, spelled exactly the way load_directory() builds its entries
+// ("<folder>/<name>") so the two can be compared with strcmp.
+static bool split_image_path(const char *path, char *folder, char *image, size_t size) {
+    char resolved[PATH_MAX];
+    if (!realpath(path, resolved)) return false;
+
+    char *last_sep = strrchr(resolved, '/');
+    if (!last_sep) return false;
+
+    // Split in place: the name follows the last separator, the folder is what
+    // precedes it ("/" when the file sits at the filesystem root).
+    const char *name = last_sep + 1;
+    *last_sep = '\0';
+    const char *dir = (last_sep == resolved) ? "/" : resolved;
+
+    int n = snprintf(image, size, "%s/%s", dir, name);
+    if (n < 0 || (size_t)n >= size) return false;
+
+    n = snprintf(folder, size, "%s", dir);
+    if (n < 0 || (size_t)n >= size) return false;
+
+    return true;
+}
+
 bool comic_viewer_load(const char *path) {
     if (path == NULL) return false;
+
+    // A lone image file: open the folder containing it and jump straight to it,
+    // the same way the file browser opens an image.
+    struct stat file_stat;
+    if (stat(path, &file_stat) == 0 && S_ISREG(file_stat.st_mode) && is_image_file(path)) {
+        char folder[PATH_MAX];
+        char image[PATH_MAX];
+        if (!split_image_path(path, folder, image, sizeof(folder))) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Cannot resolve image path: %s", path);
+            return false;
+        }
+        return comic_viewer_load_and_display(folder, image);
+    }
 
     // Store the source path
     viewer.source_path = strdup(path);
@@ -863,8 +911,10 @@ void comic_viewer_cleanup(void) {
         viewer.gamepad_id = 0;
     }
 
+    gpu_shader_shutdown();
+
     imgui_layer_shutdown();
-    
+
     free_resources();
     SDL_Quit();
 }
@@ -1066,6 +1116,17 @@ static void handle_events(void) {
                         bool new_visible = !imgui_layer_is_visible();
                         imgui_layer_set_visible(new_visible);
                         snprintf(viewer.gamepad_status_msg, sizeof(viewer.gamepad_status_msg), "ImGui overlay: %s", new_visible ? "ON" : "OFF");
+                        viewer.gamepad_status_until = SDL_GetTicks() + 1500;
+                    }
+                    break;
+                }
+                if (event.key.key == SDLK_I || event.key.scancode == SDL_SCANCODE_I) {
+                    if (!imgui_layer_is_initialized()) {
+                        snprintf(viewer.gamepad_status_msg, sizeof(viewer.gamepad_status_msg), "ImGui overlay unavailable");
+                        viewer.gamepad_status_until = SDL_GetTicks() + 2500;
+                    } else {
+                        imgui_layer_toggle_exif_info();
+                        snprintf(viewer.gamepad_status_msg, sizeof(viewer.gamepad_status_msg), "Image info: %s", imgui_layer_is_exif_info_visible() ? "ON" : "OFF");
                         viewer.gamepad_status_until = SDL_GetTicks() + 1500;
                     }
                     break;
@@ -1338,15 +1399,44 @@ static void handle_events(void) {
 
                     case SDLK_O:
                         if (event.key.repeat) break;
-                        // Cycle overlay mode
-                        if (viewer.overlay_mode == OVERLAY_GRADIENT) {
-                            viewer.overlay_mode = OVERLAY_STRETCHED;
-                        } else if (viewer.overlay_mode == OVERLAY_STRETCHED) {
-                            viewer.overlay_mode = OVERLAY_AMBILIGHT;
+                        if (event.key.mod & SDL_KMOD_SHIFT) {
+                            // Shift+O: cycle the overlay pixel shader and force the
+                            // OVERLAY_PIXEL_SHADER mode so the effect is visible.
+                            int next = (int)viewer.overlay_pixel_shader + 1;
+                            if (next >= PIXEL_SHADER_COUNT) next = PIXEL_SHADER_SCANLINES;
+                            if (next == PIXEL_SHADER_NONE) next = PIXEL_SHADER_SCANLINES;
+                            viewer.overlay_pixel_shader = (PixelShaderType)next;
+                            viewer.overlay_mode = OVERLAY_PIXEL_SHADER;
+                            snprintf(viewer.gamepad_status_msg,
+                                     sizeof(viewer.gamepad_status_msg),
+                                     "Overlay shader: %s",
+                                     pixel_shader_get_name(viewer.overlay_pixel_shader));
+                            viewer.gamepad_status_until = SDL_GetTicks() + 1500;
                         } else {
-                            viewer.overlay_mode = OVERLAY_GRADIENT;
+                            // Cycle overlay mode
+                            int next = (int)viewer.overlay_mode + 1;
+                            if (next >= OVERLAY_MODE_COUNT) next = 0;
+                            viewer.overlay_mode = (OverlayMode)next;
                         }
                         viewer.last_page_change_time = SDL_GetTicks();
+                        break;
+
+                    case SDLK_P:
+                        if (event.key.repeat) break;
+                        {
+                            // Cycle the view pixel shader; reload current view so
+                            // the new filter is applied to the surface.
+                            int next = (int)viewer.view_pixel_shader + 1;
+                            if (next >= PIXEL_SHADER_COUNT) next = PIXEL_SHADER_NONE;
+                            viewer.view_pixel_shader = (PixelShaderType)next;
+                            snprintf(viewer.gamepad_status_msg,
+                                     sizeof(viewer.gamepad_status_msg),
+                                     "View shader: %s",
+                                     pixel_shader_get_name(viewer.view_pixel_shader));
+                            viewer.gamepad_status_until = SDL_GetTicks() + 1500;
+                            unload_view(viewer.current_view_node);
+                            load_view(viewer.current_view_node);
+                        }
                         break;
                         
                     case SDLK_E: // Toggle image enhancements
@@ -1894,6 +1984,17 @@ static int load_view_surfaces_in_thread(void *data) {
     if (generation != SDL_GetAtomicInt(&viewer.load_generation)) {
         return cleanup_load_thread_resources(combined_surface);
     }
+
+    // Apply optional pixel shader filter to the view surface.
+    // Done after edge analysis so the gradient overlay uses the original edge
+    // colors; done in the worker thread so the main thread doesn't stall.
+    if (viewer.view_pixel_shader != PIXEL_SHADER_NONE) {
+        pixel_shader_apply_to_surface(viewer.view_pixel_shader, surface);
+        if (generation != SDL_GetAtomicInt(&viewer.load_generation)) {
+            return cleanup_load_thread_resources(combined_surface);
+        }
+    }
+
     view->surface = surface; // transfer ownership to main thread
 
     // Post to main thread to convert surface -> texture

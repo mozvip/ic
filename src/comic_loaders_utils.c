@@ -77,16 +77,16 @@ bool is_image_file(const char *filename) {
     if (!ext) return false;
     
     ext++; // Skip the '.'
-    return (strcasecmp(ext, "jpg") == 0 ||
-            strcasecmp(ext, "jpeg") == 0 ||
-            strcasecmp(ext, "png") == 0 ||
-            strcasecmp(ext, "gif") == 0 ||
-            strcasecmp(ext, "bmp") == 0 ||
-            strcasecmp(ext, "webp") == 0 ||
-            strcasecmp(ext, "JPG") == 0 ||
-            strcasecmp(ext, "JPEG") == 0 ||
-            strcasecmp(ext, "PNG") == 0 ||
-            strcasecmp(ext, "GIF") == 0 ||
-            strcasecmp(ext, "BMP") == 0 ||
-            strcasecmp(ext, "WEBP") == 0);
+
+    // strcasecmp already handles upper/mixed case spellings.
+    static const char *image_extensions[] = {
+        "jpg", "jpeg", "png", "gif", "bmp", "webp", "tif", "tiff", NULL
+    };
+
+    for (int i = 0; image_extensions[i]; i++) {
+        if (strcasecmp(ext, image_extensions[i]) == 0) {
+            return true;
+        }
+    }
+    return false;
 }

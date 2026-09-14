@@ -106,6 +106,8 @@ sources = files(
   'src/image_processor.c',
   'src/main.c',
   'src/overlay.c',
+  'src/pixel_shader.c',
+  'src/gpu_shader.c',
   'src/process_utils.c',
   'src/progress_bar.c',
   'src/progress_indicator.c',
@@ -119,9 +121,41 @@ imgui_sp = subproject('imgui', required: true)
 imgui_dep = imgui_sp.get_variable('imgui_dep')
 dependencies += [imgui_dep]
 
+# GPU pixel shaders: compile GLSL -> SPIR-V at build time and embed as a C header.
+glslc_prog = find_program('glslc', required: false)
+spv_embed_h = []
+if glslc_prog.found()
+  # [source path, output filename, shader stage flag]
+  shader_specs = [
+    ['shaders/fullscreen.vert.glsl', 'fullscreen.vert.spv', 'vertex'],
+    ['shaders/invert.frag.glsl',     'invert.frag.spv',     'fragment'],
+    ['shaders/scanlines.frag.glsl',  'scanlines.frag.spv',  'fragment'],
+    ['shaders/vignette.frag.glsl',   'vignette.frag.spv',   'fragment'],
+    ['shaders/sepia.frag.glsl',      'sepia.frag.spv',      'fragment'],
+    ['shaders/pixelate.frag.glsl',   'pixelate.frag.spv',   'fragment'],
+    ['shaders/mirror.frag.glsl',     'mirror.frag.spv',     'fragment']
+  ]
+  spv_targets = []
+  foreach spec : shader_specs
+    spv_targets += custom_target('spv_' + spec[1],
+      input: spec[0],
+      output: spec[1],
+      command: [glslc_prog, '-fshader-stage=' + spec[2],
+                '--target-env=vulkan1.2', '-O',
+                '-o', '@OUTPUT@', '@INPUT@'])
+  endforeach
+  spv_embed_h = custom_target('gpu_shaders_embed_h',
+    input: spv_targets,
+    output: 'gpu_shaders_embed.h',
+    command: [find_program('python3'), files('scripts/embed_spv.py'),
+              '@OUTPUT@', '@INPUT@'])
+  add_project_arguments('-DHAVE_GPU_SHADERS', language: ['c', 'cpp'])
+endif
+
 # Executable
 executable('ic',
   sources,
+  spv_embed_h,
   include_directories: inc_dirs,
   dependencies: dependencies,
   install: true,

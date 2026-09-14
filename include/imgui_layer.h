@@ -19,6 +19,10 @@ void imgui_layer_render(void);
 void imgui_layer_set_visible(bool visible);
 bool imgui_layer_is_visible(void);
 
+// EXIF/image-info overlay (toggled with the 'I' key).
+void imgui_layer_toggle_exif_info(void);
+bool imgui_layer_is_exif_info_visible(void);
+
 bool imgui_layer_wants_capture_keyboard(void);
 bool imgui_layer_wants_capture_mouse(void);
 

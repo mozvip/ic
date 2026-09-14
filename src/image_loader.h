@@ -44,6 +44,23 @@ SDL_Surface *image_load_surface(const char *filename, ImageProcessingOptions *op
 // Check if file extension is supported
 bool image_is_supported(const char *filename);
 
+// EXIF / image metadata extraction.
+#define IMAGE_EXIF_MAX_ENTRIES 96
+#define IMAGE_EXIF_KEY_LEN 64
+#define IMAGE_EXIF_VALUE_LEN 256
+
+typedef struct {
+	char key[IMAGE_EXIF_KEY_LEN];
+	char value[IMAGE_EXIF_VALUE_LEN];
+} ImageExifEntry;
+
+// Returns true when metadata extraction is supported in this build.
+bool image_loader_exif_available(void);
+
+// Extract EXIF/metadata tags from an image file into caller-provided entries.
+// Returns the number of entries filled (0 when none or unsupported).
+int image_load_exif(const char *filename, ImageExifEntry *entries, int max_entries);
+
 #ifdef __cplusplus
 }
 #endif

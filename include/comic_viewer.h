@@ -11,6 +11,7 @@
 #include <stdbool.h>
 #include "edges.h"
 #include "clipboard.h"
+#include "pixel_shader.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -82,7 +83,9 @@ typedef struct ImageView {
 typedef enum {
     OVERLAY_GRADIENT,
     OVERLAY_STRETCHED,
-    OVERLAY_AMBILIGHT
+    OVERLAY_AMBILIGHT,
+    OVERLAY_PIXEL_SHADER,
+    OVERLAY_MODE_COUNT
 } OverlayMode;
 
 struct ViewerState {
@@ -107,7 +110,7 @@ struct ViewerState {
     // Progress indicator display timer
     Uint64 last_page_change_time;  // Time when the last page change occurred
     bool show_progress_indicator;  // Whether to show the progress indicator
-    bool show_zoom_pan_info;       // Whether to show zoom/pan info overlay (toggled by 'i')
+    bool show_zoom_pan_info;       // Whether to show zoom/pan info overlay
 
     // Visual settings
     OverlayMode overlay_mode;      // Rendering mode for empty space
@@ -115,6 +118,8 @@ struct ViewerState {
     bool border_removal_enabled;   // Auto-trim white page borders
     int border_white_threshold;    // RGB average threshold for white border detection (0-255)
     int border_required_non_white; // Non-white samples needed to stop border scan
+    PixelShaderType overlay_pixel_shader; // Active shader when overlay_mode == OVERLAY_PIXEL_SHADER
+    PixelShaderType view_pixel_shader;    // Optional pixel shader applied to the view surface
 
     // Multi-image display settings
     bool multiple_images_mode;     // Whether to display multiple images
@@ -163,6 +168,7 @@ struct ViewerState {
 
     // PDF rendering backend
     PdfBackendType pdf_backend;  // Currently selected PDF backend
+    int pdf_dpi;                 // DPI used when rendering PDF pages
 };
 
 // Declare viewer as an extern variable of this struct type

@@ -126,7 +126,9 @@ Where `<comic-file-or-directory>` can be:
 - **First Page**: Home
 - **Last Page**: End
 - **Toggle Fullscreen**: F12 or F key
-- **Cycle Overlay Mode**: O key
+- **Cycle Overlay Mode**: O key (Gradient → Stretched → Ambilight → Pixel Shader)
+- **Cycle Overlay Pixel Shader**: Shift+O (Scanlines, Vignette, Pixelate, Sepia, Invert, Mirror)
+- **Cycle View Pixel Shader**: P key (off / Scanlines / Vignette / Pixelate / Sepia / Invert / Mirror)
 - **Toggle Border Removal**: R key
 - **Cycle Color Filters**: X key (Gray World, Reduce Warm, Reduce Cool, Boost Contrast, Desaturate, Binarize, None)
 - **Exit Viewer**: Escape

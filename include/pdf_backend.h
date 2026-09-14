@@ -16,6 +16,9 @@
 extern "C" {
 #endif
 
+/** Default DPI used when rasterising PDF pages. */
+#define PDF_DEFAULT_DPI 180
+
 /* Forward-declared opaque context – each backend defines its own struct. */
 typedef struct PdfBackendContext PdfBackendContext;
 
@@ -34,11 +37,12 @@ typedef struct PdfBackendOps {
      *
      * @param pdf_path   Absolute path to the PDF file.
      * @param temp_dir   Writable temp directory for intermediate files.
+     * @param dpi        Target DPI used when rasterising pages.
      * @param page_count Receives the total number of pages.
      * @return Opaque context, or NULL on failure.
      */
     PdfBackendContext* (*open)(const char *pdf_path, const char *temp_dir,
-                               int *page_count);
+                               int dpi, int *page_count);
 
     /**
      * Render a single page and return its file path.

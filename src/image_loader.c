@@ -51,8 +51,130 @@ static ImageBackend choose_backend(ImageBackend preferred) {
     return IMAGE_BACKEND_AUTO;
 }
 
+#if defined(HAVE_FREEIMAGE)
+// Verify that a JPEG's embedded EXIF (APP1) block is internally consistent:
+// the TIFF header must be valid and IFD0's offset + entry table must stay
+// within the segment. Returns false only for JPEGs whose EXIF is malformed.
+static bool exif_tiff_ifd0_in_bounds(const unsigned char *t, long n) {
+    if (n < 8) {
+        return false; // no room for even a TIFF header
+    }
+    bool le;
+    if (t[0] == 'I' && t[1] == 'I') {
+        le = true;
+    } else if (t[0] == 'M' && t[1] == 'M') {
+        le = false;
+    } else {
+        return false; // invalid byte-order marker
+    }
+    unsigned magic = le ? (unsigned)(t[2] | (t[3] << 8))
+                        : (unsigned)((t[2] << 8) | t[3]);
+    if (magic != 42) {
+        return false; // not TIFF 0x002A
+    }
+    unsigned long off = le
+        ? (unsigned long)(t[4] | (t[5] << 8) | ((unsigned long)t[6] << 16) | ((unsigned long)t[7] << 24))
+        : (unsigned long)(((unsigned long)t[4] << 24) | ((unsigned long)t[5] << 16) | (t[6] << 8) | t[7]);
+    if (off + 2 > (unsigned long)n) {
+        return false; // IFD0 offset points past the segment; can't read count
+    }
+    unsigned count = le ? (unsigned)(t[off] | (t[off + 1] << 8))
+                        : (unsigned)((t[off] << 8) | t[off + 1]);
+    // entry count (2) + count * 12-byte entries + next-IFD pointer (4)
+    unsigned long need = off + 2 + (unsigned long)count * 12 + 4;
+    return need <= (unsigned long)n;
+}
+
+// FreeImage 3.18's JPEG plugin (jpeg_read_exif_profile) performs an unchecked
+// out-of-bounds read on a truncated/malformed APP1 "Exif" segment, crashing
+// the process inside FreeImage_Load. Detect that up front so the caller can
+// fall back to a more robust backend instead of dereferencing garbage.
+static bool jpeg_exif_is_safe_for_freeimage(const char *filename) {
+    FILE *f = fopen(filename, "rb");
+    if (!f) {
+        return true; // let FreeImage report the open failure normally
+    }
+
+    unsigned char soi[2];
+    if (fread(soi, 1, 2, f) != 2 || soi[0] != 0xFF || soi[1] != 0xD8) {
+        fclose(f);
+        return true; // not a JPEG -> not affected by this bug
+    }
+
+    bool safe = true;
+    for (;;) {
+        int b = fgetc(f);
+        if (b == EOF) {
+            break;
+        }
+        if (b != 0xFF) {
+            continue; // resync to the next marker prefix
+        }
+        int marker;
+        do {
+            marker = fgetc(f);
+        } while (marker == 0xFF);
+        if (marker == EOF) {
+            break;
+        }
+        // Standalone markers carry no length/payload.
+        if (marker == 0xD9 || (marker >= 0xD0 && marker <= 0xD7)) {
+            continue;
+        }
+        if (marker == 0xDA) {
+            break; // start of scan: no more metadata markers follow
+        }
+        unsigned char lb[2];
+        if (fread(lb, 1, 2, f) != 2) {
+            break;
+        }
+        long seglen = (lb[0] << 8) | lb[1];
+        if (seglen < 2) {
+            break; // corrupt length
+        }
+        long payload = seglen - 2;
+        if (marker != 0xE1) {
+            fseek(f, payload, SEEK_CUR);
+            continue;
+        }
+        // APP1: may or may not be EXIF.
+        unsigned char sig[6];
+        long want = (payload < 6) ? payload : 6;
+        long got = (long)fread(sig, 1, (size_t)want, f);
+        if (got == 6 && memcmp(sig, "Exif\0\0", 6) == 0) {
+            long tiff = payload - 6; // declared bytes of TIFF data
+            if (tiff <= 0) {
+                safe = false;
+            } else {
+                unsigned char *buf = (unsigned char *)malloc((size_t)tiff);
+                if (buf && (long)fread(buf, 1, (size_t)tiff, f) == tiff) {
+                    safe = exif_tiff_ifd0_in_bounds(buf, tiff);
+                } else {
+                    safe = false; // fewer bytes than declared -> truncated
+                }
+                free(buf);
+            }
+            break; // found and evaluated the EXIF segment
+        }
+        // Non-EXIF APP1; skip the remainder of this segment.
+        fseek(f, payload - got, SEEK_CUR);
+    }
+
+    fclose(f);
+    return safe;
+}
+#endif
+
 static SDL_Surface *load_surface_freeimage(const char *filename, ImageProcessingOptions *options) {
 #if defined(HAVE_FREEIMAGE)
+    if (!jpeg_exif_is_safe_for_freeimage(filename)) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Declining FreeImage for %s: malformed JPEG EXIF would crash FreeImage; "
+                    "falling back to another backend",
+                    filename);
+        return NULL;
+    }
+
     FREE_IMAGE_FORMAT fif = FreeImage_GetFileType(filename, 0);
     if (fif == FIF_UNKNOWN) {
         fif = FreeImage_GetFIFFromFilename(filename);
@@ -62,8 +184,7 @@ static SDL_Surface *load_surface_freeimage(const char *filename, ImageProcessing
         fprintf(stderr, "Unsupported image format (FreeImage): %s\n", filename);
         return NULL;
     }
-
-    FIBITMAP *bitmap = FreeImage_Load(fif, filename, JPEG_ACCURATE | JPEG_EXIFROTATE);
+ FIBITMAP *bitmap = FreeImage_Load(fif, filename, JPEG_ACCURATE | JPEG_EXIFROTATE);
     if (!bitmap) {
         fprintf(stderr, "Failed to load image with FreeImage: %s\n", filename);
         return NULL;
@@ -297,6 +418,76 @@ SDL_Surface *image_load_surface(const char *filename, ImageProcessingOptions *op
     }
 
     return surface;
+}
+
+bool image_loader_exif_available(void) {
+#if defined(HAVE_FREEIMAGE)
+    return true;
+#else
+    return false;
+#endif
+}
+
+int image_load_exif(const char *filename, ImageExifEntry *entries, int max_entries) {
+#if defined(HAVE_FREEIMAGE)
+    if (!filename || !entries || max_entries <= 0) {
+        return 0;
+    }
+
+    FREE_IMAGE_FORMAT fif = FreeImage_GetFileType(filename, 0);
+    if (fif == FIF_UNKNOWN) {
+        fif = FreeImage_GetFIFFromFilename(filename);
+    }
+    if (fif == FIF_UNKNOWN || !FreeImage_FIFSupportsReading(fif)) {
+        return 0;
+    }
+
+    // Load header/metadata only when the format allows it, else fall back to a full decode.
+    FIBITMAP *dib = FreeImage_Load(fif, filename, FIF_LOAD_NOPIXELS);
+    if (!dib) {
+        dib = FreeImage_Load(fif, filename, 0);
+    }
+    if (!dib) {
+        return 0;
+    }
+
+    static const FREE_IMAGE_MDMODEL models[] = {
+        FIMD_EXIF_MAIN,
+        FIMD_EXIF_EXIF,
+        FIMD_EXIF_GPS,
+    };
+
+    int count = 0;
+    for (size_t m = 0; m < sizeof(models) / sizeof(models[0]) && count < max_entries; m++) {
+        FITAG *tag = NULL;
+        FIMETADATA *mdhandle = FreeImage_FindFirstMetadata(models[m], dib, &tag);
+        if (!mdhandle) {
+            continue;
+        }
+        do {
+            const char *key = FreeImage_GetTagKey(tag);
+            // FreeImage_TagToString returns a pointer to an internal static buffer,
+            // so copy the value immediately before the next call overwrites it.
+            const char *val = FreeImage_TagToString(models[m], tag, NULL);
+            if (key && val && val[0] != '\0') {
+                strncpy(entries[count].key, key, IMAGE_EXIF_KEY_LEN - 1);
+                entries[count].key[IMAGE_EXIF_KEY_LEN - 1] = '\0';
+                strncpy(entries[count].value, val, IMAGE_EXIF_VALUE_LEN - 1);
+                entries[count].value[IMAGE_EXIF_VALUE_LEN - 1] = '\0';
+                count++;
+            }
+        } while (count < max_entries && FreeImage_FindNextMetadata(mdhandle, &tag));
+        FreeImage_FindCloseMetadata(mdhandle);
+    }
+
+    FreeImage_Unload(dib);
+    return count;
+#else
+    (void)filename;
+    (void)entries;
+    (void)max_entries;
+    return 0;
+#endif
 }
 
 bool image_is_supported(const char *filename) {

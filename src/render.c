@@ -107,6 +107,7 @@ void viewer_display_info(void) {
         const char* overlay_str = "GRAD";
         if (viewer.overlay_mode == OVERLAY_STRETCHED) overlay_str = "STR";
         else if (viewer.overlay_mode == OVERLAY_AMBILIGHT) overlay_str = "AMBI";
+        else if (viewer.overlay_mode == OVERLAY_PIXEL_SHADER) overlay_str = "SHADER";
 
         const char* filter_str = "";
         if (options) {
@@ -129,12 +130,27 @@ void viewer_display_info(void) {
             h = (int)viewer.current_view_node->texture->h;
         }
 
-        snprintf(info_text, sizeof(info_text), "%d / %d %s %s %s [%s] (%dx%d)",
+        char overlay_label[48];
+        if (viewer.overlay_mode == OVERLAY_PIXEL_SHADER) {
+            snprintf(overlay_label, sizeof(overlay_label), "%s:%s", overlay_str,
+                     pixel_shader_get_name(viewer.overlay_pixel_shader));
+        } else {
+            snprintf(overlay_label, sizeof(overlay_label), "%s", overlay_str);
+        }
+
+        char view_shader_buf[32] = "";
+        if (viewer.view_pixel_shader != PIXEL_SHADER_NONE) {
+            snprintf(view_shader_buf, sizeof(view_shader_buf), "[PS:%s]",
+                     pixel_shader_get_name(viewer.view_pixel_shader));
+        }
+
+        snprintf(info_text, sizeof(info_text), "%d / %d %s %s %s %s [%s] (%dx%d)",
         viewer.current_view_index + 1, view_count,
         options ? (options->enhancement_enabled ? "[E+]" : "[E-]") : "[E-]",
         filter_str,
         viewer.border_removal_enabled ? "[BR+]" : "[BR-]",
-        overlay_str, w, h);
+        view_shader_buf,
+        overlay_label, w, h);
 
         SDL_Texture *text_texture = render_text_internal(info_text, (SDL_Color){255,255,255,255});
         if (text_texture) {

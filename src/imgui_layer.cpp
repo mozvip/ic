@@ -8,6 +8,7 @@
 #include "image_loader.h"
 #include "image_processor.h"
 #include "pdf_backend.h"
+#include "pixel_shader.h"
 
 #include "imgui.h"
 #include "backends/imgui_impl_sdl3.h"
@@ -15,8 +16,15 @@
 
 static bool g_imgui_initialized = false;
 static bool g_imgui_visible = false;
+static bool g_exif_visible = false;
 static SDL_Window *g_window = nullptr;
 static SDL_Renderer *g_renderer = nullptr;
+
+// Cache of the metadata read for the currently displayed image so we do not
+// re-read the file every frame. Refreshed when the displayed path changes.
+static ImageExifEntry g_exif_entries[IMAGE_EXIF_MAX_ENTRIES];
+static int g_exif_count = 0;
+static char g_exif_path[4096] = {0};
 static char g_status_message[256] = {0};
 static Uint64 g_status_message_time = 0;   // Timestamp when the message was set
 static Uint64 g_status_message_duration = 5000; // Auto-dismiss after 5 seconds
@@ -86,6 +94,92 @@ void imgui_layer_new_frame(void) {
     ImGui::NewFrame();
 }
 
+// Index into viewer.images of the primary image in the current view, or -1.
+static int current_image_index(void) {
+    if (!viewer.current_view_node || viewer.current_view_node->count <= 0) {
+        return -1;
+    }
+    int idx = viewer.current_view_node->image_indices[0];
+    if (idx < 0 || idx >= viewer.image_count) {
+        return -1;
+    }
+    return idx;
+}
+
+// Re-read metadata only when the displayed image path changes.
+static void exif_refresh(const char *path) {
+    if (!path) {
+        g_exif_path[0] = '\0';
+        g_exif_count = 0;
+        return;
+    }
+    if (strncmp(g_exif_path, path, sizeof(g_exif_path)) == 0) {
+        return; // Already cached for this path.
+    }
+    strncpy(g_exif_path, path, sizeof(g_exif_path) - 1);
+    g_exif_path[sizeof(g_exif_path) - 1] = '\0';
+    g_exif_count = image_load_exif(path, g_exif_entries, IMAGE_EXIF_MAX_ENTRIES);
+}
+
+static void imgui_layer_build_exif_ui(void) {
+    if (!g_exif_visible) return;
+
+    int idx = current_image_index();
+    const char *path = (idx >= 0) ? viewer.images[idx].path : nullptr;
+    exif_refresh(path);
+
+    ImGui::SetNextWindowSize(ImVec2(480.0f, 520.0f), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Image Info (I to toggle)", &g_exif_visible)) {
+        if (idx < 0 || !path) {
+            ImGui::TextUnformatted("No image is currently displayed.");
+            ImGui::End();
+            return;
+        }
+
+        const char *name = strrchr(path, '/');
+        ImGui::SeparatorText("File");
+        ImGui::TextWrapped("%s", name ? name + 1 : path);
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s", path);
+        }
+
+        SDL_Surface *surface = viewer.images[idx].surface;
+        if (surface) {
+            ImGui::Text("Dimensions: %d x %d px", surface->w, surface->h);
+            const char *fmt = SDL_GetPixelFormatName(surface->format);
+            if (fmt) {
+                ImGui::Text("Pixel format: %s", fmt);
+            }
+        }
+
+        ImGui::SeparatorText("EXIF Metadata");
+        if (!image_loader_exif_available()) {
+            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
+                               "Metadata extraction requires the FreeImage backend.");
+        } else if (g_exif_count == 0) {
+            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
+                               "No EXIF metadata found in this image.");
+        } else if (ImGui::BeginTable("exif_table", 2,
+                                     ImGuiTableFlags_Borders |
+                                     ImGuiTableFlags_RowBg |
+                                     ImGuiTableFlags_ScrollY |
+                                     ImGuiTableFlags_Resizable)) {
+            ImGui::TableSetupColumn("Tag", ImGuiTableColumnFlags_WidthFixed, 180.0f);
+            ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableHeadersRow();
+            for (int i = 0; i < g_exif_count; i++) {
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::TextUnformatted(g_exif_entries[i].key);
+                ImGui::TableSetColumnIndex(1);
+                ImGui::TextWrapped("%s", g_exif_entries[i].value);
+            }
+            ImGui::EndTable();
+        }
+    }
+    ImGui::End();
+}
+
 static void imgui_layer_build_ui(void) {
     // Always render the status message overlay if set (regardless of visibility toggle)
     if (g_status_message[0] != '\0') {
@@ -140,9 +234,12 @@ static void imgui_layer_build_ui(void) {
         }
     }
 
+    // The image-info overlay is independent from the F1 settings window.
+    imgui_layer_build_exif_ui();
+
     if (!g_imgui_visible) return;
 
-    ImGui::SetNextWindowSize(ImVec2(460.0f, 300.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(460.0f, 760.0f), ImGuiCond_FirstUseEver);
     if (ImGui::Begin("IC Settings (F1 to toggle)", &g_imgui_visible)) {
         ImGui::Text("Renderer: %s", SDL_GetRendererName(g_renderer));
 
@@ -160,15 +257,59 @@ static void imgui_layer_build_ui(void) {
 
         ImGui::SeparatorText("Visual");
         {
-            static const char *overlay_items[] = {"Gradient", "Stretched", "Ambilight"};
+            static const char *overlay_items[] = {
+                "Gradient", "Stretched", "Ambilight", "Pixel Shader"
+            };
             int overlay_index = (int)viewer.overlay_mode;
             if (overlay_index < 0) overlay_index = 0;
-            if (overlay_index > 2) overlay_index = 2;
+            if (overlay_index >= (int)OVERLAY_MODE_COUNT) overlay_index = (int)OVERLAY_MODE_COUNT - 1;
 
             if (ImGui::Combo("Overlay Mode", &overlay_index, overlay_items, IM_ARRAYSIZE(overlay_items))) {
                 viewer.overlay_mode = (OverlayMode)overlay_index;
                 viewer.last_page_change_time = SDL_GetTicks();
             }
+
+            // Build a shared shader-name list once per frame.
+            const int shader_count = pixel_shader_count();
+            static const char *shader_items[PIXEL_SHADER_COUNT];
+            for (int i = 0; i < shader_count && i < PIXEL_SHADER_COUNT; ++i) {
+                shader_items[i] = pixel_shader_get_name((PixelShaderType)i);
+            }
+
+            // Overlay shader: only meaningful in Pixel Shader overlay mode.
+            ImGui::BeginDisabled(viewer.overlay_mode != OVERLAY_PIXEL_SHADER);
+            int overlay_shader_index = (int)viewer.overlay_pixel_shader;
+            if (overlay_shader_index < 0) overlay_shader_index = 0;
+            if (overlay_shader_index >= shader_count) overlay_shader_index = shader_count - 1;
+            if (ImGui::Combo("Overlay Shader", &overlay_shader_index,
+                             shader_items, shader_count)) {
+                viewer.overlay_pixel_shader = (PixelShaderType)overlay_shader_index;
+                viewer.last_page_change_time = SDL_GetTicks();
+                char msg[96];
+                snprintf(msg, sizeof(msg), "Overlay shader: %s",
+                         pixel_shader_get_name(viewer.overlay_pixel_shader));
+                imgui_layer_set_status_message(msg);
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Active only when Overlay Mode is set to Pixel Shader (cycle with Shift+O)");
+            ImGui::EndDisabled();
+
+            // View shader: applied to the loaded surface, requires reloading the view.
+            int view_shader_index = (int)viewer.view_pixel_shader;
+            if (view_shader_index < 0) view_shader_index = 0;
+            if (view_shader_index >= shader_count) view_shader_index = shader_count - 1;
+            if (ImGui::Combo("View Shader", &view_shader_index,
+                             shader_items, shader_count)) {
+                viewer.view_pixel_shader = (PixelShaderType)view_shader_index;
+                comic_viewer_reload_current_view();
+                viewer.last_page_change_time = SDL_GetTicks();
+                char msg[96];
+                snprintf(msg, sizeof(msg), "View shader: %s",
+                         pixel_shader_get_name(viewer.view_pixel_shader));
+                imgui_layer_set_status_message(msg);
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Per-pixel filter baked into the view surface (cycle with P)");
 
             if (options) {
                 int filter_index = (int)options->color_filter;
@@ -310,9 +451,16 @@ static void imgui_layer_build_ui(void) {
                 }
             }
 
+            int dpi = viewer.pdf_dpi;
+            if (ImGui::SliderInt("DPI", &dpi, 36, 600)) {
+                if (dpi < 36)  dpi = 36;
+                if (dpi > 600) dpi = 600;
+                viewer.pdf_dpi = dpi;
+            }
+
             if (viewer.type == SOURCE_PDF) {
                 ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
-                    "Reopen the file to apply a new backend");
+                    "Reopen the file to apply a new backend or DPI");
             }
         }
 
@@ -357,6 +505,19 @@ void imgui_layer_set_visible(bool visible) {
 
 bool imgui_layer_is_visible(void) {
     return g_imgui_visible;
+}
+
+void imgui_layer_toggle_exif_info(void) {
+    g_exif_visible = !g_exif_visible;
+    if (g_exif_visible) {
+        // Force a re-read next frame so freshly toggling reflects the current image.
+        g_exif_path[0] = '\0';
+        g_exif_count = 0;
+    }
+}
+
+bool imgui_layer_is_exif_info_visible(void) {
+    return g_exif_visible;
 }
 
 bool imgui_layer_wants_capture_keyboard(void) {

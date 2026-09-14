@@ -9,7 +9,7 @@
             "type": "cppdbg",
             "request": "launch",
             "program": "${workspaceFolder}/builddir/ic",
-            "args": ["/mnt/homesrvpc/8t2/Calibre-BD/Unknown/Batman.et.Robin.Annee.Un.2025 (11062)/Batman.et.Robin.Annee.Un.2025 - Unknown.cbz"],
+            "args": ["/mnt/homesrvpc/4t1/complete/ariang/93njY19pV3p3jiGIE2FGZhq2OmJT1l4ggFFjrW.cbr"],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
             "environment": [],

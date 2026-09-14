@@ -96,7 +96,8 @@ ArchiveHandle* pdf_open(const char *path, int *total_images, ProgressCallback pr
     if (progress_cb) progress_cb(0.2f, "Opening PDF...");
 
     int n_pages = 0;
-    PdfBackendContext *bctx = ops->open(path, temp_dir, &n_pages);
+    int dpi = viewer.pdf_dpi > 0 ? viewer.pdf_dpi : PDF_DEFAULT_DPI;
+    PdfBackendContext *bctx = ops->open(path, temp_dir, dpi, &n_pages);
     if (!bctx || n_pages <= 0) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                      "PDF backend '%s' failed to open %s", ops->name, path);

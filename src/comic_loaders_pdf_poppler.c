@@ -21,8 +21,6 @@ typedef struct PdfBackendContext {
     int   pixel_density;   /* DPI passed to pdftoppm */
 } PopplerContext;
 
-#define POPPLER_DEFAULT_DPI 120
-
 /* ── Helpers ──────────────────────────────────────────────────────── */
 
 static int poppler_get_page_count(const char *path) {
@@ -60,6 +58,7 @@ static bool poppler_is_available(void) {
 
 static PdfBackendContext* poppler_open(const char *pdf_path,
                                         const char *temp_dir,
+                                        int dpi,
                                         int *page_count) {
     int n = poppler_get_page_count(pdf_path);
     if (n <= 0) {
@@ -74,7 +73,7 @@ static PdfBackendContext* poppler_open(const char *pdf_path,
     ctx->pdf_path      = strdup(pdf_path);
     ctx->temp_dir      = strdup(temp_dir);
     ctx->total_pages   = n;
-    ctx->pixel_density = POPPLER_DEFAULT_DPI;
+    ctx->pixel_density = dpi > 0 ? dpi : PDF_DEFAULT_DPI;
     *page_count = n;
     return (PdfBackendContext*)ctx;
 }

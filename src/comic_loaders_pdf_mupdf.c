@@ -22,8 +22,7 @@
 
 #include <mupdf/fitz.h>
 
-#define MUPDF_DEFAULT_DPI 120
-#define MUPDF_BASE_DPI    72.0f
+#define MUPDF_BASE_DPI 72.0f
 
 typedef struct PdfBackendContext {
     fz_context  *fz_ctx;
@@ -44,7 +43,9 @@ static bool mupdf_is_available(void) {
 
 static PdfBackendContext* mupdf_open(const char *pdf_path,
                                       const char *temp_dir,
+                                      int dpi,
                                       int *page_count) {
+    if (dpi <= 0) dpi = PDF_DEFAULT_DPI;
     fz_context *fz_ctx = fz_new_context(NULL, NULL, FZ_STORE_DEFAULT);
     if (!fz_ctx) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
@@ -77,7 +78,7 @@ static PdfBackendContext* mupdf_open(const char *pdf_path,
     ctx->doc      = doc;
     ctx->pdf_path = strdup(pdf_path);
     ctx->temp_dir = strdup(temp_dir);
-    ctx->zoom     = (float)MUPDF_DEFAULT_DPI / MUPDF_BASE_DPI;
+    ctx->zoom     = (float)dpi / MUPDF_BASE_DPI;
 
     fz_try(fz_ctx) {
         ctx->total_pages = fz_count_pages(fz_ctx, doc);
@@ -196,8 +197,8 @@ const PdfBackendOps pdf_backend_mupdf = {
  * ══════════════════════════════════════════════════════════════════════ */
 
 static bool stub_is_available(void)   { return false; }
-static PdfBackendContext* stub_open(const char *p, const char *t, int *c) {
-    (void)p; (void)t; (void)c;
+static PdfBackendContext* stub_open(const char *p, const char *t, int d, int *c) {
+    (void)p; (void)t; (void)d; (void)c;
     return NULL;
 }
 static bool stub_render(PdfBackendContext *c, int i, int n, char **o) {

@@ -8,7 +8,8 @@ extern struct ViewerState viewer;
 // Extracted from render.c or edges.c presumably, but render.c was calling it.
 // We need to declare it here or include a header that has it. 
 // Assuming it is in edges.h based on previous context, but let's check imports.
-#include "edges.h" 
+#include "edges.h"
+#include "pixel_shader.h"
 
 // Helper function definitions
 
@@ -164,6 +165,19 @@ void render_overlay(SDL_Renderer *renderer, ImageView *view,
                 rect.h = display_height - last_y;
                 render_vertical_gradient(renderer, rect, colors[samples-1], colors[samples-1]);
             }
+        }
+    } else if (viewer.overlay_mode == OVERLAY_PIXEL_SHADER) {
+        SDL_FRect left_dst  = { 0.0f, 0.0f, content_start_x, display_height };
+        SDL_FRect right_dst = { content_end_x, 0.0f, display_width - content_end_x, display_height };
+        if (left_dst.w > 0.0f) {
+            pixel_shader_render_overlay(viewer.overlay_pixel_shader, renderer,
+                                        &left_dst, view, false,
+                                        display_width, display_height);
+        }
+        if (right_dst.w > 0.0f) {
+            pixel_shader_render_overlay(viewer.overlay_pixel_shader, renderer,
+                                        &right_dst, view, true,
+                                        display_width, display_height);
         }
     } else {
         // Default to OVERLAY_GRADIENT
