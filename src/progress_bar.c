@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "progress_bar.h"
+#include "linux_desktop.h"
 
 // Progress bar properties
 #define PROGRESS_BAR_HEIGHT 20
@@ -38,15 +39,7 @@ bool progress_bar_init(SDL_Renderer *renderer) {
     progress_bar.window_width = output_w;
     progress_bar.window_height = output_h;
     
-    // Load font - try to use the same font as the main app
-    progress_bar.font = TTF_OpenFont("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 14);
-    if (!progress_bar.font) {
-        // Try alternate locations
-        progress_bar.font = TTF_OpenFont("/usr/share/fonts/TTF/DejaVuSans.ttf", 14);
-    }
-    if (!progress_bar.font) {
-        progress_bar.font = TTF_OpenFont("/usr/share/fonts/dejavu/DejaVuSans.ttf", 14);
-    }
+    progress_bar.font = linux_desktop_open_font(14);
     if (!progress_bar.font) {
         fprintf(stderr, "Warning: Failed to load font for progress bar\n");
         // Non-fatal, we'll just not show text

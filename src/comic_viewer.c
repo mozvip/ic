@@ -19,6 +19,9 @@
 #include <SDL3/SDL_hints.h>
 
 #include "comic_viewer.h"
+#include "temp_utils.h"
+#include "linux_desktop.h"
+#include <glib.h>
 #include "comic_loaders.h"
 #include "pdf_backend.h"
 #include "progress_bar.h"
@@ -100,21 +103,25 @@ static char *viewer_state_build_key(const char *source_path, char *out, size_t o
 }
 
 static char *viewer_state_file_path(void) {
-    char *pref_path = SDL_GetPrefPath("mozvip", "ic");
-    if (!pref_path) {
-        return NULL;
+    char root[PATH_MAX];
+    if (!temp_utils_get_state_root(root, sizeof(root))) return NULL;
+    char *full = malloc(strlen(root) + sizeof("/viewer_state.tsv"));
+    if (!full) return NULL;
+    sprintf(full, "%s/viewer_state.tsv", root);
+    if (access(full, F_OK) != 0) {
+        char *old_root = SDL_GetPrefPath("mozvip", "ic");
+        if (old_root) {
+            char *old_path = g_build_filename(old_root, "viewer_state.tsv", NULL);
+            gchar *contents = NULL;
+            gsize size = 0;
+            if (g_file_get_contents(old_path, &contents, &size, NULL)) {
+                g_file_set_contents_full(full, contents, size, G_FILE_SET_CONTENTS_CONSISTENT, 0600, NULL);
+            }
+            g_free(contents);
+            g_free(old_path);
+            SDL_free(old_root);
+        }
     }
-
-    const char *file_name = "viewer_state.tsv";
-    size_t len = strlen(pref_path) + strlen(file_name) + 1;
-    char *full = malloc(len);
-    if (!full) {
-        SDL_free(pref_path);
-        return NULL;
-    }
-
-    snprintf(full, len, "%s%s", pref_path, file_name);
-    SDL_free(pref_path);
     return full;
 }
 
@@ -407,6 +414,7 @@ static void remove_current_view(void) {
 // Path armed by the first Delete press; the second press only commits if the
 // current view still shows this exact file.
 static char delete_confirm_path[PATH_MAX];
+static bool delete_confirm_permanent;
 static Uint64 delete_confirm_until = 0;
 
 static void set_transient_status(const char *fmt, ...) {
@@ -466,10 +474,7 @@ static void remove_image_entry(int index) {
     }
 }
 
-// Directory mode only: unlink the file(s) backing the current view, then drop the
-// view. This is irreversible (no trash can), so the first Delete press only arms
-// the action and the second one within DELETE_CONFIRM_MS commits it.
-static void delete_current_view_from_disk(void) {
+static void delete_current_view_from_disk(bool permanent) {
     ImageView *view = viewer.current_view_node;
     if (!view || view->count <= 0) return;
 
@@ -483,14 +488,18 @@ static void delete_current_view_from_disk(void) {
 
     Uint64 now = SDL_GetTicks();
     bool armed = now <= delete_confirm_until &&
+                 permanent == delete_confirm_permanent &&
                  strcmp(delete_confirm_path, first_path) == 0;
     if (!armed) {
         SDL_strlcpy(delete_confirm_path, first_path, sizeof(delete_confirm_path));
         delete_confirm_until = now + DELETE_CONFIRM_MS;
+        delete_confirm_permanent = permanent;
         if (view->count > 1) {
-            set_transient_status("Press Delete again to erase %d files from disk", view->count);
+            set_transient_status("Press %s again to %s %d files", permanent ? "Shift+Delete" : "Delete",
+                                 permanent ? "permanently erase" : "trash", view->count);
         } else {
-            set_transient_status("Press Delete again to erase %s from disk",
+            set_transient_status("Press %s again to %s %s", permanent ? "Shift+Delete" : "Delete",
+                                 permanent ? "permanently erase" : "trash",
                                  get_filename_from_path(first_path));
         }
         return;
@@ -526,10 +535,13 @@ static void delete_current_view_from_disk(void) {
     for (int i = 0; i < index_count; i++) {
         const char *path = viewer.images[indices[i]].path;
         if (!path) continue;
-        if (remove(path) != 0) {
-            snprintf(last_error, sizeof(last_error), "%s: %s",
-                     get_filename_from_path(path), strerror(errno));
-            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to delete %s: %s", path, strerror(errno));
+        bool removed = permanent ? remove(path) == 0 : linux_desktop_trash_file(path, last_error, sizeof(last_error));
+        if (!removed) {
+            if (permanent) {
+                snprintf(last_error, sizeof(last_error), "%s: %s",
+                         get_filename_from_path(path), strerror(errno));
+            }
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to delete %s: %s", path, last_error);
             continue;
         }
         unlinked[i] = true;
@@ -555,15 +567,17 @@ static void delete_current_view_from_disk(void) {
     }
 
     if (last_error[0] != '\0') {
-        set_transient_status("Deleted %d file(s), failed on %s", deleted_count, last_error);
+        set_transient_status("%s %d file(s), failed on %s", permanent ? "Deleted" : "Trashed", deleted_count, last_error);
     } else if (deleted_count > 1) {
-        set_transient_status("Deleted %d files from disk", deleted_count);
+        set_transient_status("%s %d files", permanent ? "Deleted" : "Trashed", deleted_count);
     } else {
-        set_transient_status("Deleted %s", last_name);
+        set_transient_status("%s %s", permanent ? "Deleted" : "Trashed", last_name);
     }
 }
 
 bool comic_viewer_init(int monitor_index) {
+    SDL_SetAppMetadata("IC", IC_VERSION, IC_APPLICATION_ID);
+    SDL_SetHint(SDL_HINT_APP_ID, IC_APPLICATION_ID);
     // Set best quality for scaling operations
     SDL_SetHint("SDL_RENDER_SCALE_QUALITY", "2");  // 0=nearest, 1=linear, 2="best"
     
@@ -659,17 +673,7 @@ bool comic_viewer_init(int monitor_index) {
                viewer.drawable_width, viewer.drawable_height);
     }
 
-    // Load font - try to load a system font if available
-    // viewer.font = TTF_OpenFont("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 20);
-    viewer.font = TTF_OpenFont("/usr/share/fonts/liberation/LiberationMono-Bold.ttf", 20);
-    if (!viewer.font) {
-        // Try another common font location
-        viewer.font = TTF_OpenFont("/usr/share/fonts/TTF/DejaVuSans.ttf", 20);
-    }
-    if (!viewer.font) {
-        // Try another common font location
-        viewer.font = TTF_OpenFont("/usr/share/fonts/dejavu/DejaVuSans.ttf", 20);
-    }
+    viewer.font = linux_desktop_open_font(20);
     if (!viewer.font) {
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Warning: Failed to load font: %s", SDL_GetError());
         // Continue without a font - we'll handle the null case when rendering
@@ -1045,6 +1049,7 @@ void comic_viewer_run(void) {
 
     // Main loop
     while (viewer.running) {
+        linux_desktop_pump();
         // Handle events
         handle_events();
 
@@ -1063,6 +1068,7 @@ void comic_viewer_run(void) {
 }
 
 void comic_viewer_cleanup(void) {
+    linux_desktop_cleanup();
     comic_viewer_finish_loading();
     comic_viewer_save_reading_position();
 
@@ -1151,6 +1157,9 @@ static void handle_events(void) {
                         free(res);
                     }
                 }
+                break;
+            case SDL_EVENT_DROP_FILE:
+                file_browser_load_path(event.drop.data);
                 break;
             case SDL_EVENT_QUIT:
                 viewer.running = false;
@@ -1282,6 +1291,10 @@ static void handle_events(void) {
                     file_browser_handle_key(event.key.key);
                     break;
                 }
+                if (event.key.key == SDLK_F2) {
+                    linux_desktop_show_controls();
+                    break;
+                }
                 if (event.key.key == SDLK_F1 || event.key.scancode == SDL_SCANCODE_F1) {
                     if (!imgui_layer_is_initialized()) {
                         snprintf(viewer.gamepad_status_msg, sizeof(viewer.gamepad_status_msg), "ImGui overlay unavailable");
@@ -1336,7 +1349,7 @@ static void handle_events(void) {
                         if (event.key.repeat) break;
                         if (viewer.type == SOURCE_DIRECTORY) {
                             // In a folder, Delete erases the file(s) from disk
-                            delete_current_view_from_disk();
+                            delete_current_view_from_disk((event.key.mod & SDL_KMOD_SHIFT) != 0);
                         } else {
                             // Remove current view
                             remove_current_view();

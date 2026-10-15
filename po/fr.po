@@ -1,0 +1,78 @@
+msgid ""
+msgstr ""
+"Language: fr\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n > 1);\n"
+
+msgid "Open Comic"
+msgstr "Ouvrir une bande dessinée"
+
+msgid "Open"
+msgstr "Ouvrir"
+
+msgid "Cancel"
+msgstr "Annuler"
+
+msgid "Close"
+msgstr "Fermer"
+
+msgid "Up"
+msgstr "Dossier parent"
+
+msgid "List"
+msgstr "Liste"
+
+msgid "Compact"
+msgstr "Compact"
+
+msgid "Grid"
+msgstr "Grille"
+
+msgid "IC Reading Controls"
+msgstr "Commandes de lecture IC"
+
+msgid "Previous Page"
+msgstr "Page précédente"
+
+msgid "Next Page"
+msgstr "Page suivante"
+
+msgid "First Page"
+msgstr "Première page"
+
+msgid "Last Page"
+msgstr "Dernière page"
+
+msgid "Zoom In"
+msgstr "Agrandir"
+
+msgid "Zoom Out"
+msgstr "Réduire"
+
+msgid "Fullscreen"
+msgstr "Plein écran"
+
+msgid "Move to Trash"
+msgstr "Mettre à la corbeille"
+
+msgid "Quit"
+msgstr "Quitter"
+
+msgid "No comic open"
+msgstr "Aucune bande dessinée ouverte"
+
+msgid "%s\nPage %d of %d\n%s"
+msgstr "%s\nPage %d sur %d\n%s"
+
+msgid "Image Info (I to toggle)"
+msgstr "Informations sur l'image (I)"
+
+msgid "IC Settings (F1 to toggle)"
+msgstr "Paramètres IC (F1)"
+
+msgid "Enable Auto Border Removal"
+msgstr "Supprimer automatiquement les bordures"
+
+msgid "Reset to Defaults"
+msgstr "Rétablir les valeurs par défaut"

@@ -16,6 +16,7 @@ cc = meson.get_compiler('c')
 
 # Dear ImGui overlay is always enabled (requires a C++ compiler).
 add_languages('cpp', required: true, native: false)
+add_project_arguments('-DIC_VERSION="' + meson.project_version() + '"', language: ['c', 'cpp'])
 
 # Add feature test macros for POSIX functions
 add_project_arguments('-D_POSIX_C_SOURCE=200809L', language: 'c')
@@ -29,6 +30,11 @@ if not sdl3_image_dep.found()
 endif
 sdl3_ttf_dep = dependency('SDL3_ttf', required: true)
 libzip_dep = dependency('libzip', required: true)
+gio_dep = dependency('gio-2.0', version: '>=2.72', required: true)
+fontconfig_dep = dependency('fontconfig', required: true)
+gtk_dep = dependency('gtk+-3.0', required: true)
+add_project_arguments('-DIC_LOCALE_DIR="' + join_paths(get_option('prefix'), get_option('localedir')) + '"', language: ['c', 'cpp'])
+subdir('po')
 
 # Optional image backends
 freeimage_dep = dependency('freeimage', required: false)
@@ -64,6 +70,9 @@ dependencies = [
   sdl3_dep,
   sdl3_ttf_dep,
   libzip_dep,
+  gio_dep,
+  fontconfig_dep,
+  gtk_dep,
   m_dep,
 ]
 
@@ -112,6 +121,7 @@ sources = files(
   'src/image_loader.c',
   'src/image_processor.c',
   'src/main.c',
+  'src/linux_desktop.c',
   'src/overlay.c',
   'src/pixel_shader.c',
   'src/gpu_shader.c',
@@ -167,6 +177,19 @@ ic_exe = executable('ic',
   dependencies: dependencies,
   install: true,
 )
+test('cli-help', ic_exe, args: ['--help'])
+test('cli-version', ic_exe, args: ['--version'])
+foreach cli_case : [
+  ['cli-invalid-monitor', ['--monitor', 'wrong']],
+  ['cli-unknown-option', ['--unknown']],
+  ['cli-extra-file', ['first.cbz', 'second.cbz']],
+]
+  if meson.version().version_compare('>=1.11.0')
+    test(cli_case[0], ic_exe, args: cli_case[1], expected_fail: true)
+  else
+    test(cli_case[0], ic_exe, args: cli_case[1], should_fail: true)
+  endif
+endforeach
 
 test_objects = []
 excluded_test_sources = files('src/main.c', 'src/comic_viewer.c', 'src/clipboard.c')
@@ -183,6 +206,12 @@ safety_tests = executable('safety-tests',
 )
 test('safety', safety_tests,
   env: ['SDL_VIDEODRIVER=dummy', 'IC_IMAGE_BACKEND=auto'], timeout: 60)
+xvfb = find_program('xvfb-run', required: false)
+if xvfb.found() and get_option('b_sanitize') == 'none'
+  test('native-controls', xvfb, args: ['-a', safety_tests], depends: translations[0],
+    env: ['SDL_VIDEODRIVER=dummy', 'IC_TEST_NATIVE=1', 'LANGUAGE=fr', 'LC_ALL=fr_FR.UTF-8',
+          'IC_TEST_LOCALE_DIR=' + join_paths(meson.current_build_dir(), 'po')], timeout: 60)
+endif
 if freeimage_dep.found() and image_backend_opt != 'sdl_image' and sdl3_image_dep.found()
   test('safety-sdl-image', safety_tests,
     env: ['SDL_VIDEODRIVER=dummy', 'IC_IMAGE_BACKEND=sdl_image'], timeout: 60)
@@ -190,13 +219,18 @@ endif
 
 # Install desktop file
 install_data('ic.desktop',
+  rename: 'io.github.mozvip.ic.desktop',
   install_dir: join_paths(get_option('datadir'), 'applications')
 )
 
 # Install icon
-install_data('ic.png',
-  install_dir: join_paths(get_option('datadir'), 'pixmaps')
-)
+image_tool = find_program('magick', 'convert', required: true)
+custom_target('desktop-icon', input: 'ic.png', output: 'io.github.mozvip.ic.png',
+  command: [image_tool, '@INPUT@', '-resize', '256x256', '-background', 'none',
+            '-gravity', 'center', '-extent', '256x256', '@OUTPUT@'],
+  install: true, install_dir: join_paths(get_option('datadir'), 'icons/hicolor/256x256/apps'))
+install_data('io.github.mozvip.ic.metainfo.xml',
+  install_dir: join_paths(get_option('datadir'), 'metainfo'))
 
 # Install headers (optional, if you want to make this a library later)
 # install_headers(

@@ -6,16 +6,22 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
+#include <limits.h>
+#include <getopt.h>
 #include "comic_viewer.h"
 #include "comic_loaders.h"
 #include "file_browser.h"
 #include "imgui_layer.h"
+#include "linux_desktop.h"
 
 void print_usage(const char *program_name) {
-    printf("Usage: %s [options] <file_or_directory>\n", program_name);
+    printf("Usage: %s [options] [--] [file_or_directory]\n", program_name);
     printf("Options:\n");
     printf("  -h, --help     Display this help message\n");
-    printf("  -m, --monitor <index>  Specify which monitor to use (0 is primary)\n");
+    printf("  --version     Display the version\n");
+    printf("  --accessible  Open native screen-reader-accessible reading controls\n");
+    printf("  -m, --monitor <index>  Display index, or -1 for the primary display (default)\n");
     printf("  --overlay <mode>       Specify overlay mode: gradient (default), stretched, ambilight\n");
     printf("  --image-backend <name> Select image backend: auto, freeimage, sdl_image\n");
     printf("\n");
@@ -27,41 +33,50 @@ void print_usage(const char *program_name) {
 }
 
 int main(int argc, char *argv[]) {
-    // Check if help was requested
-    if (argc > 1 && (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0)) {
-        print_usage(argv[0]);
-        return 0;
-    }
-
-    int monitor_index = 0;  // Default to primary monitor
+    linux_desktop_init();
+    bool accessible_controls = false;
+    int monitor_index = -1;
     const char *path = NULL;
     const char *image_backend = NULL;
-    int i;
-    
-    // Parse command line options
-    for (i = 1; i < argc; i++) {
-        if ((strcmp(argv[i], "-m") == 0 || strcmp(argv[i], "--monitor") == 0) && i + 1 < argc) {
-            monitor_index = atoi(argv[i + 1]);
-            i++;  // Skip the next argument (the monitor index)
-        } else if (strcmp(argv[i], "--overlay") == 0 && i + 1 < argc) {
-             const char *mode = argv[i + 1];
-             if (strcmp(mode, "stretched") == 0) {
-                 viewer.overlay_mode = OVERLAY_STRETCHED;
-             } else if (strcmp(mode, "gradient") == 0) {
-                 viewer.overlay_mode = OVERLAY_GRADIENT;
-             } else if (strcmp(mode, "ambilight") == 0) {
-                 viewer.overlay_mode = OVERLAY_AMBILIGHT;
-             } else {
-                 fprintf(stderr, "Unknown overlay mode: %s. Using default (gradient).\n", mode);
-             }
-             i++;
-        } else if (strcmp(argv[i], "--image-backend") == 0 && i + 1 < argc) {
-            image_backend = argv[i + 1];
-            i++;
-        } else if (path == NULL && argv[i][0] != '-') {
-            path = argv[i];
+    OverlayMode overlay = OVERLAY_GRADIENT;
+    static const struct option arguments[] = {
+        {"help", no_argument, NULL, 'h'},
+        {"version", no_argument, NULL, 'v'},
+        {"accessible", no_argument, NULL, 'a'},
+        {"monitor", required_argument, NULL, 'm'},
+        {"overlay", required_argument, NULL, 'o'},
+        {"image-backend", required_argument, NULL, 'b'},
+        {NULL, 0, NULL, 0}
+    };
+    int argument;
+    while ((argument = getopt_long(argc, argv, "hvm:", arguments, NULL)) != -1) {
+        switch (argument) {
+            case 'h': print_usage(argv[0]); return 0;
+            case 'v': printf("ic %s\n", IC_VERSION); return 0;
+            case 'a': accessible_controls = true; break;
+            case 'm': {
+                char *end;
+                errno = 0;
+                long index = strtol(optarg, &end, 10);
+                if (errno || !*optarg || *end || index < -1 || index > INT_MAX) {
+                    fprintf(stderr, "Invalid monitor index: %s\n", optarg);
+                    return 2;
+                }
+                monitor_index = (int)index;
+                break;
+            }
+            case 'b': image_backend = optarg; break;
+            case 'o':
+                if (!strcmp(optarg, "gradient")) overlay = OVERLAY_GRADIENT;
+                else if (!strcmp(optarg, "stretched")) overlay = OVERLAY_STRETCHED;
+                else if (!strcmp(optarg, "ambilight")) overlay = OVERLAY_AMBILIGHT;
+                else { fprintf(stderr, "Invalid overlay: %s\n", optarg); return 2; }
+                break;
+            default: return 2;
         }
     }
+    if (argc - optind > 1) { fprintf(stderr, "Only one source can be opened at a time\n"); return 2; }
+    if (optind < argc) path = argv[optind];
 
     if (image_backend && !comic_viewer_set_image_backend(image_backend)) {
         fprintf(stderr,
@@ -76,20 +91,8 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    // Parse command line options again for settings that need initialization
-    // The previous loop was just for pre-init settings like monitor
-    // But we need to set overlay_mode after init because init sets the default
-    for (i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--overlay") == 0 && i + 1 < argc) {
-             const char *mode = argv[i + 1];
-             if (strcmp(mode, "stretched") == 0) {
-                 viewer.overlay_mode = OVERLAY_STRETCHED;
-             } else if (strcmp(mode, "gradient") == 0) {
-                 viewer.overlay_mode = OVERLAY_GRADIENT;
-             }
-             i++;
-        }
-    }
+    viewer.overlay_mode = overlay;
+    if (accessible_controls) linux_desktop_show_controls();
 
     int return_value = 0;
     // Load the comic or directory

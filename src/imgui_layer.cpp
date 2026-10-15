@@ -1,4 +1,5 @@
 #include "imgui_layer.h"
+#include "i18n.h"
 
 #include <cstdio>
 #include <cstring>
@@ -130,7 +131,7 @@ static void imgui_layer_build_exif_ui(void) {
     exif_refresh(path);
 
     ImGui::SetNextWindowSize(ImVec2(480.0f, 520.0f), ImGuiCond_FirstUseEver);
-    if (ImGui::Begin("Image Info (I to toggle)", &g_exif_visible)) {
+    if (ImGui::Begin(IC_("Image Info (I to toggle)"), &g_exif_visible)) {
         if (idx < 0 || !path) {
             ImGui::TextUnformatted("No image is currently displayed.");
             ImGui::End();
@@ -249,7 +250,7 @@ static void imgui_layer_build_ui(void) {
     if (!g_imgui_visible) return;
 
     ImGui::SetNextWindowSize(ImVec2(460.0f, 760.0f), ImGuiCond_FirstUseEver);
-    if (ImGui::Begin("IC Settings (F1 to toggle)", &g_imgui_visible)) {
+    if (ImGui::Begin(IC_("IC Settings (F1 to toggle)"), &g_imgui_visible)) {
         ImGui::Text("Renderer: %s", SDL_GetRendererName(g_renderer));
 
         ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
@@ -350,7 +351,7 @@ static void imgui_layer_build_ui(void) {
         ImGui::SeparatorText("Border Removal");
         {
             bool border_removal_enabled = viewer.border_removal_enabled;
-            if (ImGui::Checkbox("Enable Auto Border Removal", &border_removal_enabled)) {
+            if (ImGui::Checkbox(IC_("Enable Auto Border Removal"), &border_removal_enabled)) {
                 comic_viewer_finish_loading();
                 viewer.border_removal_enabled = border_removal_enabled;
                 comic_viewer_reload_current_view();
@@ -381,7 +382,7 @@ static void imgui_layer_build_ui(void) {
                 imgui_layer_set_status_message("Border removal thresholds updated");
             }
 
-            if (ImGui::Button("Reset to Defaults")) {
+            if (ImGui::Button(IC_("Reset to Defaults"))) {
                 comic_viewer_finish_loading();
                 viewer.border_white_threshold = 240;
                 viewer.border_required_non_white = 3;

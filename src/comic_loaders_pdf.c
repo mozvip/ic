@@ -175,7 +175,10 @@ void pdf_close(ArchiveHandle *handle) {
     }
 
     free(handle->page_indices);
-    if (handle->temp_dir) free(handle->temp_dir);
+    if (handle->temp_dir) {
+        temp_utils_remove_dir(handle->temp_dir);
+        free(handle->temp_dir);
+    }
     free(handle->path);
     free(handle);
 }

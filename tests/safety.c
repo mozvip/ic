@@ -1,5 +1,9 @@
 #undef NDEBUG
+#define _XOPEN_SOURCE 700
 #include <assert.h>
+#include <ftw.h>
+#include <gtk/gtk.h>
+#include "i18n.h"
 #include <dirent.h>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -52,8 +56,10 @@ static int try_archive_lock(void *data) {
 }
 
 static void close_archive(ArchiveHandle *handle) {
-    assert(rmdir(handle->temp_dir) == 0);
+    char *directory = strdup(handle->temp_dir);
     archive_close(handle);
+    assert(access(directory, F_OK) != 0);
+    free(directory);
 }
 
 static void test_zip(void) {
@@ -108,6 +114,22 @@ static void test_zip(void) {
     assert(!archive_open(path, ARCHIVE_TYPE_CBZ, &count, NULL));
     assert(count == 0);
     assert(remove(path) == 0);
+}
+
+static void test_cache_cleanup(void) {
+    char directory[512], path[PATH_MAX];
+    assert(temp_utils_create_dir(directory, sizeof(directory), "cleanup_XXXXXX"));
+    snprintf(path, sizeof(path), "%s/nested", directory);
+    assert(mkdir(path, 0700) == 0);
+    char image[PATH_MAX];
+    snprintf(image, sizeof(image), "%s/nested/page.bmp", directory);
+    make_image(image);
+    snprintf(path, sizeof(path), "%s/outside", directory);
+    assert(symlink(sandbox, path) == 0);
+    assert(temp_utils_remove_dir(directory));
+    assert(access(directory, F_OK) != 0 && access(sandbox, F_OK) == 0);
+    assert(temp_utils_remove_dir(directory));
+    assert(!temp_utils_remove_dir(sandbox));
 }
 
 static void reset_comic(void) {
@@ -473,13 +495,112 @@ static void test_clipboard(void) {
 static void test_delete(void) {
     setup_comic();
     press_key(SDLK_DELETE, false);
+    delete_current_view_from_disk(true);
+    assert(access(first_path, F_OK) == 0);
+    delete_current_view_from_disk(false);
     for (int index = 0; index < 20; index++) press_key(SDLK_DELETE, true);
     assert(access(first_path, F_OK) == 0 && viewer.view_count == 2);
     press_key(SDLK_DELETE, false);
     comic_viewer_finish_loading();
     assert(access(first_path, F_OK) != 0 && access(second_path, F_OK) == 0);
     assert(viewer.view_count == 1 && viewer.image_count == 1);
+    char trashed[PATH_MAX], metadata[PATH_MAX];
+    snprintf(trashed, sizeof(trashed), "%s/Trash/files/first.bmp", sandbox);
+    snprintf(metadata, sizeof(metadata), "%s/Trash/info/first.bmp.trashinfo", sandbox);
+    assert(access(trashed, F_OK) == 0 && access(metadata, F_OK) == 0);
+    char error[256] = "";
+    assert(!linux_desktop_trash_file(first_path, error, sizeof(error)) && *error);
     reset_comic();
+    setup_comic();
+    delete_current_view_from_disk(true);
+    assert(access(first_path, F_OK) == 0);
+    delete_current_view_from_disk(true);
+    comic_viewer_finish_loading();
+    assert(access(first_path, F_OK) != 0 && viewer.view_count == 1);
+    reset_comic();
+}
+
+static void test_state_migration(void) {
+    char *legacy_root = SDL_GetPrefPath("mozvip", "ic");
+    assert(legacy_root);
+    char *legacy = g_build_filename(legacy_root, "viewer_state.tsv", NULL);
+    assert(g_file_set_contents(legacy, "legacy-state\n", -1, NULL));
+    char *current = viewer_state_file_path();
+    char *contents = NULL;
+    assert(current && strstr(current, "/state/ic/viewer_state.tsv"));
+    assert(g_file_get_contents(current, &contents, NULL, NULL));
+    assert(!strcmp(contents, "legacy-state\n"));
+    g_free(contents);
+    assert(remove(legacy) == 0 && remove(current) == 0);
+    g_free(legacy);
+    SDL_free(legacy_root);
+    free(current);
+}
+
+static void test_native_controls(void) {
+    if (!getenv("IC_TEST_NATIVE")) return;
+    setup_comic();
+    linux_desktop_init();
+    if (getenv("IC_TEST_LOCALE_DIR")) bindtextdomain("ic", getenv("IC_TEST_LOCALE_DIR"));
+    if (getenv("IC_TEST_LOCALE_DIR")) assert(!strcmp(IC_("Next Page"), "Page suivante"));
+    linux_desktop_show_controls();
+    linux_desktop_pump();
+    GList *windows = gtk_window_list_toplevels();
+    assert(windows);
+    GtkWidget *window = windows->data;
+    assert(!strcmp(gtk_window_get_title(GTK_WINDOW(window)), IC_("IC Reading Controls")));
+    GtkWidget *box = gtk_bin_get_child(GTK_BIN(window));
+    GList *children = gtk_container_get_children(GTK_CONTAINER(box));
+    int buttons = 0;
+    for (GList *child = children; child; child = child->next) {
+        GtkWidget *widget = child->data;
+        if (!GTK_IS_BUTTON(widget)) continue;
+        AtkObject *accessible = gtk_widget_get_accessible(widget);
+        assert(atk_object_get_role(accessible) == ATK_ROLE_PUSH_BUTTON);
+        assert(atk_object_get_name(accessible));
+        buttons++;
+        if (!strcmp(gtk_button_get_label(GTK_BUTTON(widget)), IC_("Next Page"))) {
+            g_signal_emit_by_name(widget, "clicked");
+            handle_events();
+            assert(viewer.current_view_index == 1);
+        }
+        if (!strcmp(gtk_button_get_label(GTK_BUTTON(widget)), IC_("Zoom In"))) {
+            viewer.max_zoom = 10;
+            g_signal_emit_by_name(widget, "clicked");
+            handle_events();
+            assert(viewer.zoomed && viewer.zoom_level > 1);
+        }
+    }
+    assert(buttons == 10);
+    g_list_free(children);
+    g_list_free(windows);
+    linux_desktop_cleanup();
+    reset_comic();
+}
+
+static int remove_fixture(const char *path, const struct stat *info, int type, struct FTW *walk) {
+    (void)info;
+    (void)type;
+    (void)walk;
+    return remove(path);
+}
+
+static void test_drop_file(void) {
+    setup_comic();
+    ImageView *current = viewer.current_view_node;
+    assert(!file_browser_load_path("/nonexistent/ic-comic.cbz"));
+    assert(viewer.current_view_node == current);
+    SDL_Event event = {0};
+    event.type = SDL_EVENT_DROP_FILE;
+    event.drop.data = first_path;
+    assert(SDL_PushEvent(&event));
+    handle_events();
+    comic_viewer_finish_loading();
+    assert(viewer.type == SOURCE_DIRECTORY && viewer.image_count == 2);
+    assert(viewer.current_view_node && viewer.current_view_node->texture);
+    assert(!strcmp(viewer.images[viewer.current_view_node->image_indices[0]].path, first_path));
+    reset_comic();
+    if (viewer.archive) { archive_close(viewer.archive); viewer.archive = NULL; }
 }
 
 int main(void) {
@@ -487,7 +608,17 @@ int main(void) {
     assert(mkdtemp(template));
     SDL_strlcpy(sandbox, template, sizeof(sandbox));
     assert(setenv("XDG_DATA_HOME", sandbox, 1) == 0);
+    assert(setenv("HOME", sandbox, 1) == 0);
+    char cache_home[PATH_MAX], state_home[PATH_MAX];
+    snprintf(cache_home, sizeof(cache_home), "%s/cache", sandbox);
+    snprintf(state_home, sizeof(state_home), "%s/state", sandbox);
+    assert(setenv("XDG_CACHE_HOME", cache_home, 1) == 0);
+    assert(setenv("XDG_STATE_HOME", state_home, 1) == 0);
     assert(SDL_Init(SDL_INIT_VIDEO));
+    assert(TTF_Init());
+    TTF_Font *system_font = linux_desktop_open_font(14);
+    assert(system_font);
+    TTF_CloseFont(system_font);
     assert(image_loader_init());
     viewer.preload_event_type = SDL_RegisterEvents(1);
     assert(viewer.preload_event_type != (Uint32)-1);
@@ -500,6 +631,7 @@ int main(void) {
     snprintf(first_path, sizeof(first_path), "%s/first.bmp", sandbox);
     snprintf(second_path, sizeof(second_path), "%s/second.bmp", sandbox);
     test_zip();
+    test_cache_cleanup();
     test_directory_progress();
     test_monitors();
     test_gamma();
@@ -509,7 +641,10 @@ int main(void) {
     test_navigation_loading();
     test_merge_and_empty_navigation();
     test_reading_position();
+    test_state_migration();
     test_clipboard();
+    test_drop_file();
+    test_native_controls();
     test_delete();
     setup_comic();
     load_view(viewer.current_view_node->next);
@@ -531,10 +666,7 @@ int main(void) {
     }
     closedir(directory);
     assert(rmdir(temp_path) == 0);
-    char path[PATH_MAX];
-    snprintf(path, sizeof(path), "%s/mozvip/ic", sandbox); rmdir(path);
-    snprintf(path, sizeof(path), "%s/mozvip", sandbox); rmdir(path);
-    rmdir(sandbox);
+    assert(nftw(sandbox, remove_fixture, 16, FTW_DEPTH | FTW_PHYS) == 0);
     puts("PASS: loading, rendering, navigation, processing, clipboard, and persistence regressions");
     return 0;
 }

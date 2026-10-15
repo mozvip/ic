@@ -11,18 +11,17 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-24.04
-    container: ubuntu:26.04
+    container: ubuntu:22.04
     env:
       DEBIAN_FRONTEND: noninteractive
     steps:
-      - name: Install Dependencies
+      - name: Install Bootstrap Dependencies
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends \
-            ca-certificates git build-essential cmake meson ninja-build pkg-config \
-            libsdl3-dev libsdl3-ttf-dev libsdl3-image-dev libzip-dev \
-            libfreeimage-dev glslc poppler-utils fonts-dejavu-core
+          apt-get install -y --no-install-recommends ca-certificates git
       - uses: actions/checkout@v4
+      - name: Install Dependencies
+        run: bash scripts/ci-dependencies.sh
       - name: Configure
         run: meson setup builddir --buildtype=release -Dimage_backend=auto
       - name: Build
@@ -34,15 +33,24 @@ jobs:
           mkdir -p release
           cp builddir/ic README.md LICENSE release/
           tar -czf "ic-${GITHUB_REF_NAME}-linux.tar.gz" -C release .
+      - name: Install AppImage Tools
+        run: bash scripts/appimage-tools.sh
+      - name: Build AppImage
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: ./scripts/build-appimage.sh
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: ic-${{ github.ref_name }}-linux.tar.gz
+          files: |
+            ic-${{ github.ref_name }}-linux.tar.gz
+            *.AppImage
           body: |
             Release ${{ github.ref_name }}
 
-            Linux x86_64 binary built on Ubuntu 26.04 using Meson.
-            Requires SDL3, SDL3_ttf, SDL3_image, libzip, and FreeImage runtime libraries.
+            Linux x86_64 packages built on Ubuntu 22.04 (glibc 2.35 baseline) using Meson.
+            The AppImage bundles SDL3, SDL3_ttf, SDL3_image, GTK3, GIO, and Fontconfig libraries.
+            The native binary requires those runtime libraries, libzip, and FreeImage.
             PDF support uses Poppler utilities; CBR support requires unrar.
             The native archive does not bundle these dependencies.
 

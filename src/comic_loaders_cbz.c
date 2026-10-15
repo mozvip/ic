@@ -235,9 +235,7 @@ void cbz_close(ArchiveHandle *handle) {
     
     // Clean up temporary directory (if needed)
     if (handle->temp_dir) {
-        // Optionally remove temp files
-        // const char *args[] = {"rm", "-rf", handle->temp_dir, NULL};
-        // execute_process(args, false, NULL);
+        temp_utils_remove_dir(handle->temp_dir);
         free(handle->temp_dir);
     }
     

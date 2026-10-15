@@ -1,4 +1,5 @@
 #include "file_browser.h"
+#include "i18n.h"
 
 #include "comic_loaders.h"
 #include "comic_viewer.h"
@@ -303,6 +304,17 @@ static void fb_go_up_and_select_child(const char *child_name) {
     fb.scroll_to_selected = true;
 }
 
+extern "C" bool file_browser_load_path(const char *path) {
+    struct stat info;
+    if (!path || stat(path, &info) != 0 || (!S_ISDIR(info.st_mode) && !fb_is_supported(path))) return false;
+    fb_unload_current_comic();
+    bool opened = comic_viewer_load(path);
+    if (opened && viewer_has_current_view()) viewer_init_view(viewer.current_view_node);
+    if (opened) file_browser_close();
+    else file_browser_open(path);
+    return opened;
+}
+
 static void fb_activate_selected(void) {
     if (fb.entries.empty()) {
         return;
@@ -345,20 +357,7 @@ static void fb_activate_selected(void) {
         return;
     }
 
-    fb_unload_current_comic();
-
-    int opened = 0;
-    if (is_image_file(full)) {
-        opened = comic_viewer_load_and_display(fb.current_path, full) ? 1 : 0;
-    } else {
-        opened = comic_viewer_load(full) ? 1 : 0;
-    }
-
-    if (opened && viewer_has_current_view()) {
-        viewer_init_view(viewer.current_view_node);
-    }
-
-    file_browser_close();
+    file_browser_load_path(full);
 }
 
 extern "C" void file_browser_handle_key(SDL_Keycode key) {
@@ -383,7 +382,7 @@ extern "C" void file_browser_render(void) {
     bool keep_open = true;
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize;
 
-    if (!ImGui::Begin("Open Comic", &keep_open, flags)) {
+    if (!ImGui::Begin(IC_("Open Comic"), &keep_open, flags)) {
         ImGui::End();
         if (!keep_open) {
             file_browser_close();
@@ -598,26 +597,26 @@ extern "C" void file_browser_render(void) {
         return;
     }
 
-    if (ImGui::Button("List")) {
+    if (ImGui::Button(IC_("List"))) {
         fb.view_mode = FB_VIEW_LIST;
     }
     ImGui::SameLine();
-    if (ImGui::Button("Compact")) {
+    if (ImGui::Button(IC_("Compact"))) {
         fb.view_mode = FB_VIEW_COMPACT;
     }
     ImGui::SameLine();
-    if (ImGui::Button("Grid")) {
+    if (ImGui::Button(IC_("Grid"))) {
         fb.view_mode = FB_VIEW_GRID;
     }
 
     ImGui::SameLine();
     ImGui::TextDisabled("Mode: %s (V to cycle)", fb_view_mode_name(fb.view_mode));
 
-    if (ImGui::Button("Open") && !fb.entries.empty()) {
+    if (ImGui::Button(IC_("Open")) && !fb.entries.empty()) {
         fb_activate_selected();
     }
     ImGui::SameLine();
-    if (ImGui::Button("Up")) {
+    if (ImGui::Button(IC_("Up"))) {
         char child[PATH_MAX] = "";
         fb_normalize_path(fb.current_path);
         char *slash = strrchr(fb.current_path, '/');
@@ -628,7 +627,7 @@ extern "C" void file_browser_render(void) {
         fb_go_up_and_select_child(child);
     }
     ImGui::SameLine();
-    if (ImGui::Button("Close") || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+    if (ImGui::Button(IC_("Close")) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
         file_browser_close();
     }
 

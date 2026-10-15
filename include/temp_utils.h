@@ -8,8 +8,10 @@
 extern "C" {
 #endif
 
-// Build and ensure the app temp root exists: <SDL_GetPrefPath>/tmp
+// Build and ensure the app cache root exists.
 bool temp_utils_get_root(char *out_root, size_t out_size);
+bool temp_utils_get_state_root(char *out_root, size_t out_size);
+bool temp_utils_remove_dir(const char *path);
 
 // Create a unique temporary directory in the app temp root.
 bool temp_utils_create_dir(char *out_dir, size_t out_size, const char *dir_template);

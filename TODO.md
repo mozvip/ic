@@ -1,5 +1,21 @@
 # Code Review TODO
 
+## Linux Desktop Integration
+
+- [x] Use XDG cache/state directories and migrate legacy reading position.
+- [x] Remove extracted/rendered page directories on archive close without following symlinks.
+- [x] Discover system fonts with Fontconfig.
+- [x] Set a stable application ID and install matching desktop, hicolor icon, and AppStream metadata.
+- [x] Register supported image MIME types and accept dropped files.
+- [x] Use Trash by default and require separate Shift+Delete confirmation for permanent removal.
+- [x] Add version reporting, strict CLI validation, and `--` support.
+- [x] Support unprivileged and custom-prefix installation without implicit sudo.
+- [x] Build against Ubuntu 22.04 and publish AppImages on tagged releases.
+- [x] Add native AT-SPI reading controls and initial gettext/French translations.
+- [ ] Extend translation coverage to all remaining settings, progress, and status text.
+- [ ] Provide accessibility for the remaining ImGui settings and image-content descriptions.
+- [ ] Consider safe crash-stale cache collection and explicit legacy-cache cleanup.
+
 Review date: 2026-10-14. All nine high-priority and nine medium-priority findings
 are implemented. Verification details and remaining manual checks are below.
 

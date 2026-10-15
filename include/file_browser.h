@@ -13,6 +13,7 @@ extern "C" {
 void file_browser_open(const char *path);
 // Close browser and free internal resources
 void file_browser_close(void);
+bool file_browser_load_path(const char *path);
 // Handle key input when active
 void file_browser_handle_key(SDL_Keycode key);
 // Render overlay (call after normal scene render)

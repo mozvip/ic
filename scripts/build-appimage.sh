@@ -28,14 +28,14 @@ fi
 
 rm -rf "$BUILD_DIR" "$APPDIR"
 
-meson setup "$BUILD_DIR" --buildtype=release -Dimage_backend=sdl_image
+meson setup "$BUILD_DIR" --buildtype=release --prefix=/usr -Dimage_backend=sdl_image
 meson compile -C "$BUILD_DIR"
 
-install -Dm755 "$BUILD_DIR/ic" "$APPDIR/usr/bin/ic"
-install -Dm644 "$ROOT_DIR/ic.desktop" "$APPDIR/usr/share/applications/ic.desktop"
-mkdir -p "$APPDIR/usr/share/icons/hicolor/256x256/apps"
-"$IMAGE_TOOL" "$ROOT_DIR/ic.png" -resize 256x256 -background none -gravity center -extent 256x256 \
-  "$APPDIR/usr/share/icons/hicolor/256x256/apps/ic.png"
+DESTDIR="$APPDIR" meson install -C "$BUILD_DIR" --no-rebuild
+desktop-file-validate "$APPDIR/usr/share/applications/io.github.mozvip.ic.desktop"
+appstreamcli validate --no-net "$APPDIR/usr/share/metainfo/io.github.mozvip.ic.metainfo.xml"
+mv "$APPDIR/usr/share/metainfo/io.github.mozvip.ic.metainfo.xml" \
+  "$APPDIR/usr/share/metainfo/io.github.mozvip.ic.appdata.xml"
 
 export VERSION="${VERSION:-$(git -C "$ROOT_DIR" describe --tags --always 2>/dev/null || echo 1.0.0)}"
 export NO_STRIP="${NO_STRIP:-1}"
@@ -44,8 +44,9 @@ export APPIMAGE_EXTRACT_AND_RUN="${APPIMAGE_EXTRACT_AND_RUN:-1}"
 linuxdeploy \
   --appdir "$APPDIR" \
   --executable "$APPDIR/usr/bin/ic" \
-  --desktop-file "$APPDIR/usr/share/applications/ic.desktop" \
-  --icon-file "$APPDIR/usr/share/icons/hicolor/256x256/apps/ic.png" \
+  --desktop-file "$APPDIR/usr/share/applications/io.github.mozvip.ic.desktop" \
+  --icon-file "$APPDIR/usr/share/icons/hicolor/256x256/apps/io.github.mozvip.ic.png" \
+  --plugin gtk \
   --output appimage
 
 echo "AppImage generated in $ROOT_DIR"

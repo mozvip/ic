@@ -11,7 +11,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-24.04
-    container: ubuntu:26.04
+    container: ubuntu:22.04
     env:
       DEBIAN_FRONTEND: noninteractive
     strategy:
@@ -23,14 +23,13 @@ jobs:
           - image_backend: auto
             sanitizer: address,undefined
     steps:
-      - name: Install Dependencies
+      - name: Install Bootstrap Dependencies
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends \
-            ca-certificates git build-essential cmake meson ninja-build pkg-config \
-            libsdl3-dev libsdl3-ttf-dev libsdl3-image-dev libzip-dev \
-            libfreeimage-dev glslc poppler-utils fonts-dejavu-core
+          apt-get install -y --no-install-recommends ca-certificates git
       - uses: actions/checkout@v4
+      - name: Install Dependencies
+        run: bash scripts/ci-dependencies.sh
       - name: Configure
         run: >-
           meson setup builddir
@@ -53,17 +52,7 @@ jobs:
           if-no-files-found: error
       - name: Install AppImage Tools
         if: matrix.image_backend == 'sdl_image' && matrix.sanitizer == 'none'
-        run: |
-          apt-get install -y --no-install-recommends curl imagemagick desktop-file-utils file
-          mkdir -p "$RUNNER_TEMP/appimage-tools"
-          curl --fail --location --retry 3 \
-            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage \
-            --output "$RUNNER_TEMP/appimage-tools/linuxdeploy"
-          curl --fail --location --retry 3 \
-            https://github.com/linuxdeploy/linuxdeploy-plugin-appimage/releases/download/continuous/linuxdeploy-plugin-appimage-x86_64.AppImage \
-            --output "$RUNNER_TEMP/appimage-tools/linuxdeploy-plugin-appimage"
-          chmod +x "$RUNNER_TEMP/appimage-tools/linuxdeploy" "$RUNNER_TEMP/appimage-tools/linuxdeploy-plugin-appimage"
-          echo "$RUNNER_TEMP/appimage-tools" >> "$GITHUB_PATH"
+        run: bash scripts/appimage-tools.sh
       - name: Build AppImage
         if: matrix.image_backend == 'sdl_image' && matrix.sanitizer == 'none'
         env:

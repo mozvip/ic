@@ -14,6 +14,9 @@ built with C, SDL3, and Dear ImGui.
 - Fill page margins with gradient, stretched, ambilight, or shader backgrounds.
 - Apply color filters and pixel shaders, and copy the current view to the clipboard.
 - Restore a saved reading position, including zoom and pan, for each source.
+- Open files from the desktop or by dropping them onto the viewer.
+- Use native, screen-reader-accessible reading controls with `F2` or `--accessible`.
+- Move directory images to Trash by default, with explicit permanent deletion available.
 
 ## Install
 
@@ -46,17 +49,20 @@ Native artifacts contain a `.tar.gz` archive. Unzip the artifact, extract that
 archive, and run `./ic`. Native binaries require the corresponding system runtime
 libraries; they do not bundle dependencies.
 
-CI builds target Linux x86_64 on Ubuntu 26.04. AppImages bundle application
-libraries but are not guaranteed to work on older distributions. PDF and CBR
+CI builds target Linux x86_64 on Ubuntu 22.04, with a glibc 2.35 baseline and
+pinned SDL3 libraries built from source. AppImages bundle application libraries;
+older glibc versions are unsupported, and graphics-driver compatibility still
+depends on the host. The baseline builds use CPU shaders because `glslc` is optional. PDF and CBR
 command-line tools are not bundled; see [Runtime Dependencies](#runtime-dependencies).
 
-Tagged `v*` releases publish a native binary archive on the
+Tagged `v*` releases publish both an AppImage and a native binary archive on the
 [Releases page](https://github.com/mozvip/ic/releases).
 
 ### Build from Source
 
 Required tools are a C11 compiler, a C++ compiler, Git, Meson, Ninja, pkg-config,
-and CMake for dependency discovery. Required libraries are SDL3, SDL3_ttf, libzip,
+and CMake for dependency discovery, plus gettext and ImageMagick. Required libraries
+are SDL3, SDL3_ttf, libzip, GIO/GLib 2.72 or newer, Fontconfig, GTK3,
 and at least one image decoder: FreeImage or SDL3_image. Meson downloads the pinned
 Dear ImGui subproject on first configuration.
 
@@ -65,14 +71,15 @@ On Ubuntu 26.04:
 ```sh
 sudo apt update
 sudo apt install build-essential git cmake meson ninja-build pkg-config \
-  libsdl3-dev libsdl3-ttf-dev libsdl3-image-dev libzip-dev libfreeimage-dev
+  libsdl3-dev libsdl3-ttf-dev libsdl3-image-dev libzip-dev libfreeimage-dev \
+  libglib2.0-dev libfontconfig1-dev libgtk-3-dev gettext imagemagick
 ```
 
 On Arch Linux:
 
 ```sh
 sudo pacman -S --needed base-devel git cmake meson ninja pkgconf \
-  sdl3 sdl3_ttf sdl3_image libzip freeimage
+  sdl3 sdl3_ttf sdl3_image libzip freeimage glib2 fontconfig gtk3 gettext imagemagick
 ```
 
 Older distribution releases may not package SDL3. FreeImage can be omitted if
@@ -99,14 +106,19 @@ To select an image-backend policy, add one of these options to the initial
 For an existing build directory, use `meson configure builddir -Dimage_backend=sdl_image`
 instead of running the initial setup again.
 
-To install the binary and desktop entry system-wide:
+To install for the current user without elevated privileges:
 
 ```sh
-./install.sh
+./install.sh --user
 ```
 
-The install script builds in release mode and requests elevated privileges for
-installation. After a system library upgrade, reconfigure the build if Ninja
+This installs to `~/.local`; ensure `~/.local/bin` is on `PATH`. A custom absolute
+prefix is supported with `./install.sh --prefix /path/to/prefix`. The default
+prefix is `/usr/local`, which requires running the installation as root; the script
+never invokes `sudo` itself. It builds in `builddir-install` and installs the
+launcher, hicolor icon, AppStream metadata, and translation catalogs alongside the binary.
+
+After a system library upgrade, reconfigure the build if Ninja
 reports a missing versioned library:
 
 ```sh
@@ -116,12 +128,13 @@ meson compile -C builddir
 
 ### Build an AppImage
 
-Install the source-build dependencies, ImageMagick, `linuxdeploy`, and its
-AppImage output plugin. Both packaging tools must be available on `PATH`.
-For Arch Linux, an AUR helper can install the tooling:
+Install the source-build dependencies, `desktop-file-utils`, AppStream,
+`linuxdeploy`, its AppImage output plugin, and its GTK plugin. The packaging tools
+must be available on `PATH`. The helper downloads all three linuxdeploy tools:
 
 ```sh
-yay -S --needed linuxdeploy-appimage appimagetool-bin imagemagick
+bash scripts/appimage-tools.sh
+export PATH="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/ic-appimage-tools:$PATH"
 ./scripts/build-appimage.sh
 ```
 
@@ -155,12 +168,17 @@ ic ./my-images/                  # Image folder
 ic ./my-images/page-12.png       # Start at a specific image
 ic --monitor 1 "my-comic.cbz"     # Select a display by zero-based index
 ic --image-backend sdl_image ./my-images/
+ic --accessible "my-comic.cbz"   # Native reading controls
+ic --version
+ic -- "-leading-dash.cbz"        # Stop option parsing
 ```
 
 Use `ic --help` to see command-line options. The image backend can also be selected
 through `IC_IMAGE_BACKEND=auto|freeimage|sdl_image` or the `F1` settings panel,
 provided that backend was compiled in. Backgrounds are selectable with `O` or in
-the settings panel.
+the settings panel. Unknown options, invalid monitor values, and multiple source
+arguments are rejected. `--monitor -1` selects the primary display; nonnegative
+values select a display by index.
 
 ### Controls
 
@@ -175,6 +193,7 @@ their own keyboard and mouse input.
 | Open file browser | Enter |
 | Fullscreen | F or F11 |
 | Settings panel | F1 |
+| Native reading controls | F2 |
 | Image / EXIF information | I |
 | Single-page / combine with next page | 1 / 2 |
 | Toggle zoom | Z or left-click |
@@ -192,11 +211,14 @@ their own keyboard and mouse input.
 | Decrease brightness / contrast / gamma | Shift+B / Shift+C / Shift+G |
 | Copy current view to clipboard | Ctrl+Shift+C |
 | Remove current view | Delete |
+| Permanently delete directory images | Shift+Delete |
 | Quit when not cropping | Escape |
 
-**Directory deletion is permanent:** in folder mode, Delete removes the current
-view's image files from disk, not just from the reading session. Press Delete
-twice within three seconds to confirm. Deleting the last remaining view is refused.
+In folder mode, Delete moves the current view's image files to the desktop Trash.
+Press Delete twice within three seconds to confirm. Shift+Delete explicitly erases
+files permanently and requires its own second Shift+Delete confirmation. Switching
+between these modes resets confirmation. Trash failures never fall back to erasing
+files. Deleting the last remaining view is refused.
 In archive mode, Delete removes a view from the session without modifying the archive.
 Cropping changes the displayed view; it does not rewrite the source image.
 
@@ -208,15 +230,40 @@ Cropping changes the displayed view; it does not rewrite the source image.
 | CBR / RAR | `unrar` on `PATH` |
 | PDF via Poppler | `pdfinfo` and `pdftoppm` from Poppler utilities |
 | PDF via MuPDF | Optional compiled-in MuPDF backend |
-| Text and interface labels | A supported system font, such as DejaVu Sans |
+| Text and interface labels | A system sans-serif font discovered through Fontconfig |
+| Native controls and file chooser | GTK3 with the desktop's AT-SPI accessibility bridge |
 
 Select the PDF renderer and rendering DPI in the `F1` settings panel. Image format
 support depends on the compiled-in decoder. Sources support up to 1,000 images;
 larger archives are rejected, and directory imports stop at that limit.
 
-Reading position is stored per source in `viewer_state.tsv` under SDL's per-user
-preference directory and saved on source changes and clean shutdown. Temporary
-extracted/rendered pages are also kept under that preference directory.
+Reading position is saved on source changes and clean shutdown in
+`$XDG_STATE_HOME/ic/viewer_state.tsv`, defaulting to `~/.local/state/ic/viewer_state.tsv`.
+Existing state from SDL's old `mozvip/ic` preference directory is copied on first
+use without deleting the original. Extracted/rendered pages live under
+`$XDG_CACHE_HOME/ic`, defaulting to `~/.cache/ic`, and their owned directories are
+removed when an archive closes. Cleanup does not follow symlinks outside those
+directories. A crash can leave disposable cache files behind; the old preference
+directory's legacy extraction cache is not migrated or removed automatically.
+
+### Accessibility and Language
+
+`F2` or `--accessible` opens a native GTK window with named AT-SPI buttons for
+opening files, page navigation, zoom, fullscreen, Trash, and quitting, plus the
+current source, page, and status. Its native file chooser supports keyboard and
+screen-reader navigation. ImGui settings panels themselves are not AT-SPI
+accessible, and IC does not provide OCR or descriptions of comic artwork.
+
+Gettext catalogs follow the system locale. Initial French translations cover
+native controls, browser actions, and selected settings labels; remaining text
+still falls back to English. For an installed French UTF-8 locale, run:
+
+```sh
+LC_ALL=fr_FR.UTF-8 ic --accessible
+```
+
+Translation sources are in [po/fr.po](po/fr.po); extract new messages with
+`meson compile -C builddir ic-pot`.
 
 ## Development
 
@@ -238,11 +285,19 @@ meson test -C builddir-asan --print-errorlogs
 The [safety regression suite](tests/safety.c) uses SDL's dummy video driver and
 covers loading, rendering geometry, navigation, processing, clipboard ownership,
 and reading-position persistence. Both image decoders are tested when available.
+It also checks XDG paths, state migration, symlink-safe cache cleanup, Trash
+recovery metadata, confirmation modes, dropped files, and CLI validation. When
+`xvfb-run` is available, non-sanitized builds additionally test native accessibility
+roles, page/zoom actions, and French text; this test requires `fr_FR.UTF-8` to be
+generated. CI installs Xvfb and generates that locale.
 
 The [CI workflow](.github/workflows/c-cpp.yml) runs on pushes, pull requests, and
 manual dispatches. It tests release builds with both backend policies and an
 additional sanitizer build, then publishes native binaries and an SDL_image AppImage.
-The [release workflow](.github/workflows/release.yml) packages native binaries for `v*` tags.
+The [release workflow](.github/workflows/release.yml) publishes native binaries and
+AppImages for `v*` tags. [scripts/ci-dependencies.sh](scripts/ci-dependencies.sh)
+bootstraps the Ubuntu 22.04 container and pinned SDL libraries; it is intended for
+disposable CI containers, not for installing dependencies on an arbitrary host.
 
 Contributions are welcome through issues and pull requests. Keep changes focused,
 add regression coverage for behavioral changes, and run the Meson tests before submitting.
