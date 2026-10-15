@@ -1,8 +1,9 @@
-name: Linux
+name: Build Linux Binary and AppImage
 
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -32,13 +33,49 @@ jobs:
       - uses: actions/checkout@v4
       - name: Configure
         run: >-
-          meson setup builddir --buildtype=debug
+          meson setup builddir
+          --buildtype=${{ matrix.sanitizer == 'none' && 'release' || 'debug' }}
           -Dimage_backend=${{ matrix.image_backend }}
           -Db_sanitize=${{ matrix.sanitizer }}
       - name: Build
         run: meson compile -C builddir
       - name: Test
         run: meson test -C builddir --print-errorlogs
+      - name: Package Binary
+        if: matrix.sanitizer == 'none'
+        run: tar -czf "ic-linux-x86_64-${{ matrix.image_backend }}.tar.gz" -C builddir ic
+      - name: Upload Binary
+        if: matrix.sanitizer == 'none'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ic-linux-x86_64-${{ matrix.image_backend }}
+          path: ic-linux-x86_64-${{ matrix.image_backend }}.tar.gz
+          if-no-files-found: error
+      - name: Install AppImage Tools
+        if: matrix.image_backend == 'sdl_image' && matrix.sanitizer == 'none'
+        run: |
+          apt-get install -y --no-install-recommends curl imagemagick desktop-file-utils file
+          mkdir -p "$RUNNER_TEMP/appimage-tools"
+          curl --fail --location --retry 3 \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage \
+            --output "$RUNNER_TEMP/appimage-tools/linuxdeploy"
+          curl --fail --location --retry 3 \
+            https://github.com/linuxdeploy/linuxdeploy-plugin-appimage/releases/download/continuous/linuxdeploy-plugin-appimage-x86_64.AppImage \
+            --output "$RUNNER_TEMP/appimage-tools/linuxdeploy-plugin-appimage"
+          chmod +x "$RUNNER_TEMP/appimage-tools/linuxdeploy" "$RUNNER_TEMP/appimage-tools/linuxdeploy-plugin-appimage"
+          echo "$RUNNER_TEMP/appimage-tools" >> "$GITHUB_PATH"
+      - name: Build AppImage
+        if: matrix.image_backend == 'sdl_image' && matrix.sanitizer == 'none'
+        env:
+          VERSION: ${{ github.sha }}
+        run: ./scripts/build-appimage.sh
+      - name: Upload AppImage
+        if: matrix.image_backend == 'sdl_image' && matrix.sanitizer == 'none'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ic-linux-x86_64-AppImage
+          path: '*.AppImage'
+          if-no-files-found: error
       - name: Upload Test Logs
         if: always()
         uses: actions/upload-artifact@v4

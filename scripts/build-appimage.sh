@@ -17,6 +17,15 @@ if ! command -v linuxdeploy >/dev/null 2>&1; then
   exit 1
 fi
 
+if command -v magick >/dev/null 2>&1; then
+  IMAGE_TOOL=magick
+elif command -v convert >/dev/null 2>&1; then
+  IMAGE_TOOL=convert
+else
+  echo "ImageMagick is required to prepare the application icon" >&2
+  exit 1
+fi
+
 rm -rf "$BUILD_DIR" "$APPDIR"
 
 meson setup "$BUILD_DIR" --buildtype=release -Dimage_backend=sdl_image
@@ -24,9 +33,13 @@ meson compile -C "$BUILD_DIR"
 
 install -Dm755 "$BUILD_DIR/ic" "$APPDIR/usr/bin/ic"
 install -Dm644 "$ROOT_DIR/ic.desktop" "$APPDIR/usr/share/applications/ic.desktop"
-install -Dm644 "$ROOT_DIR/ic.png" "$APPDIR/usr/share/icons/hicolor/256x256/apps/ic.png"
+mkdir -p "$APPDIR/usr/share/icons/hicolor/256x256/apps"
+"$IMAGE_TOOL" "$ROOT_DIR/ic.png" -resize 256x256 -background none -gravity center -extent 256x256 \
+  "$APPDIR/usr/share/icons/hicolor/256x256/apps/ic.png"
 
 export VERSION="${VERSION:-$(git -C "$ROOT_DIR" describe --tags --always 2>/dev/null || echo 1.0.0)}"
+export NO_STRIP="${NO_STRIP:-1}"
+export APPIMAGE_EXTRACT_AND_RUN="${APPIMAGE_EXTRACT_AND_RUN:-1}"
 
 linuxdeploy \
   --appdir "$APPDIR" \

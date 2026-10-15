@@ -105,6 +105,18 @@ VERSION=1.0.0 ./scripts/build-appimage.sh
 Notes:
 - The script disables linuxdeploy stripping (`NO_STRIP=1`) to avoid failures with RELR-enabled system libraries.
 - The script normalizes `ic.png` to a valid freedesktop icon size for AppImage packaging.
+- Packaging tools run without FUSE using `APPIMAGE_EXTRACT_AND_RUN=1`.
+
+### GitHub CI Artifacts
+
+The **Build Linux Binary and AppImage** workflow builds and tests on pushes and pull requests,
+and can also be started manually from the Actions tab. Successful runs publish native binary
+archives for both image backends and an `ic-linux-x86_64-AppImage` artifact using SDL_image.
+
+Download and unzip the AppImage artifact, then make the AppImage executable with
+`chmod +x IC-*.AppImage`. Builds use Ubuntu 26.04 and are not guaranteed to run on older
+distributions. Poppler utilities for PDF files and `unrar` for CBR files remain external
+runtime dependencies.
 
 ## Usage
 
