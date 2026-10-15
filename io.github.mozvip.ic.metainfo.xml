@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.mozvip.ic</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>Apache-2.0</project_license>
+  <name>IC</name>
+  <summary>Read comic archives, PDF documents, and image collections</summary>
+  <description>
+    <p>IC is a Linux desktop reader for CBZ and CBR comic archives, PDF documents,
+    and folders of images. Browse files, read single pages or spreads, and resume
+    your reading position.</p>
+    <p>Adjust scaling, zoom, margins, border removal, and image enhancement.
+    Keyboard, mouse, and gamepad navigation are supported.</p>
+  </description>
+  <launchable type="desktop-id">io.github.mozvip.ic.desktop</launchable>
+  <provides><binary>ic</binary></provides>
+  <url type="homepage">https://github.com/mozvip/ic</url>
+  <url type="bugtracker">https://github.com/mozvip/ic/issues</url>
+  <developer id="io.github.mozvip"><name>mozvip</name></developer>
+  <content_rating type="oars-1.1"/>
+</component>
