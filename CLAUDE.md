@@ -39,8 +39,9 @@ Optional, detected at configure time and gated behind `-D` defines:
 
 | Dependency | Define | Effect when missing |
 |---|---|---|
-| FreeImage | `HAVE_FREEIMAGE` | falls back to SDL3_image for decoding + no EXIF |
-| SDL3_image | `HAVE_SDL_IMAGE3` | FreeImage only |
+| FreeImage | `HAVE_FREEIMAGE` | falls back to SDL3_image or Imlib2 for decoding + no EXIF |
+| SDL3_image | `HAVE_SDL_IMAGE3` | FreeImage and/or Imlib2 only |
+| Imlib2 | `HAVE_IMLIB2` | FreeImage and/or SDL3_image only |
 | MuPDF (`mupdf`, `mupdf-third`) | `HAVE_MUPDF` | only the Poppler CLI PDF backend exists |
 | `glslc` | `HAVE_GPU_SHADERS` | GPU pixel shaders unavailable; CPU fallback used |
 
@@ -98,8 +99,8 @@ view nodes at runtime, so the list mutates during a session. `viewer.images[]` (
 
 Two runtime-switchable backend families, both selectable from the ImGui panel (F1):
 
-- **Image decode** — `ImageBackend` (auto / freeimage / sdl_image) in `src/image_loader.h`.
-  `auto` prefers FreeImage, falls back to SDL3_image. CLI: `--image-backend`.
+- **Image decode** — `ImageBackend` (auto / freeimage / sdl_image / imlib2) in `src/image_loader.h`.
+  `auto` prefers Imlib2, then FreeImage and SDL3_image. CLI: `--image-backend`.
 - **PDF render** — `PdfBackendOps` vtable in [include/pdf_backend.h](include/pdf_backend.h)
   (`name`, `is_available`, `open`, `render_page`, `close`). Adding a backend means a new
   `const PdfBackendOps` instance, an entry in the registry in `comic_loaders_pdf.c`, and a

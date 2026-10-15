@@ -1,7 +1,7 @@
 option(
   'image_backend',
   type: 'combo',
-  choices: ['auto', 'freeimage', 'sdl_image'],
+  choices: ['auto', 'freeimage', 'sdl_image', 'imlib2'],
   value: 'auto',
-  description: 'Preferred image decode backend. auto prefers FreeImage when available and falls back to SDL3_image.'
+  description: 'Preferred image decode backend. auto prefers Imlib2, then FreeImage and SDL3_image.'
 )

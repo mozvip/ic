@@ -13,6 +13,7 @@ typedef enum {
 	IMAGE_BACKEND_AUTO = 0,
 	IMAGE_BACKEND_FREEIMAGE,
 	IMAGE_BACKEND_SDL_IMAGE,
+	IMAGE_BACKEND_IMLIB2,
 	IMAGE_BACKEND_COUNT
 } ImageBackend;
 
@@ -22,7 +23,7 @@ bool image_loader_init(void);
 // Cleanup image loading subsystem.
 void image_loader_cleanup(void);
 
-// Set preferred backend. When set to AUTO, FreeImage is preferred then SDL_image.
+// Set preferred backend. AUTO prefers Imlib2, then FreeImage and SDL_image.
 // Returns false if the requested backend is unavailable.
 bool image_loader_set_preferred_backend(ImageBackend backend);
 
@@ -35,7 +36,7 @@ bool image_loader_backend_available(ImageBackend backend);
 // Human-readable backend names.
 const char *image_loader_backend_name(ImageBackend backend);
 
-// Parse backend name strings: auto, freeimage, sdl_image.
+// Parse backend name strings: auto, freeimage, sdl_image, imlib2.
 ImageBackend image_loader_parse_backend(const char *name);
 
 // Decode an image to a surface and optionally apply enhancement options.

@@ -178,7 +178,7 @@ extern struct ViewerState viewer;
 // monitor_index: Index of the monitor to use (-1 for default)
 bool comic_viewer_init(int monitor_index);
 
-// Set preferred image backend: auto|freeimage|sdl_image.
+// Set preferred image backend: auto|freeimage|sdl_image|imlib2.
 bool comic_viewer_set_image_backend(const char *backend_name);
 
 // Reload currently visible view so runtime decoder/processing changes apply immediately.

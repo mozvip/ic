@@ -63,7 +63,7 @@ Tagged `v*` releases publish both an AppImage and a native binary archive on the
 Required tools are a C11 compiler, a C++ compiler, Git, Meson, Ninja, pkg-config,
 and CMake for dependency discovery, plus gettext and ImageMagick. Required libraries
 are SDL3, SDL3_ttf, libzip, GIO/GLib 2.72 or newer, Fontconfig, GTK3,
-and at least one image decoder: FreeImage or SDL3_image. Meson downloads the pinned
+and at least one image decoder: FreeImage, SDL3_image, or Imlib2. Meson downloads the pinned
 Dear ImGui subproject on first configuration.
 
 On Ubuntu 26.04:
@@ -71,7 +71,7 @@ On Ubuntu 26.04:
 ```sh
 sudo apt update
 sudo apt install build-essential git cmake meson ninja-build pkg-config \
-  libsdl3-dev libsdl3-ttf-dev libsdl3-image-dev libzip-dev libfreeimage-dev \
+  libsdl3-dev libsdl3-ttf-dev libsdl3-image-dev libzip-dev libfreeimage-dev libimlib2-dev \
   libglib2.0-dev libfontconfig1-dev libgtk-3-dev gettext imagemagick
 ```
 
@@ -79,7 +79,7 @@ On Arch Linux:
 
 ```sh
 sudo pacman -S --needed base-devel git cmake meson ninja pkgconf \
-  sdl3 sdl3_ttf sdl3_image libzip freeimage glib2 fontconfig gtk3 gettext imagemagick
+  sdl3 sdl3_ttf sdl3_image libzip freeimage imlib2 glib2 fontconfig gtk3 gettext imagemagick
 ```
 
 Older distribution releases may not package SDL3. FreeImage can be omitted if
@@ -99,9 +99,10 @@ To select an image-backend policy, add one of these options to the initial
 
 | Option | Behavior |
 | --- | --- |
-| `-Dimage_backend=auto` | Default; prefers FreeImage and falls back to SDL3_image |
+| `-Dimage_backend=auto` | Default; prefers Imlib2, then FreeImage and SDL3_image |
 | `-Dimage_backend=freeimage` | Requires FreeImage to be available |
 | `-Dimage_backend=sdl_image` | Requires SDL3_image and excludes FreeImage |
+| `-Dimage_backend=imlib2` | Requires Imlib2 to be available |
 
 For an existing build directory, use `meson configure builddir -Dimage_backend=sdl_image`
 instead of running the initial setup again.
@@ -174,7 +175,7 @@ ic -- "-leading-dash.cbz"        # Stop option parsing
 ```
 
 Use `ic --help` to see command-line options. The image backend can also be selected
-through `IC_IMAGE_BACKEND=auto|freeimage|sdl_image` or the `F1` settings panel,
+through `IC_IMAGE_BACKEND=auto|freeimage|sdl_image|imlib2` or the `F1` settings panel,
 provided that backend was compiled in. Backgrounds are selectable with `O` or in
 the settings panel. Unknown options, invalid monitor values, and multiple source
 arguments are rejected. `--monitor -1` selects the primary display; nonnegative

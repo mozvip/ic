@@ -28,6 +28,7 @@ sdl3_image_dep = dependency('SDL3_image', required: false, method: 'pkg-config')
 if not sdl3_image_dep.found()
   sdl3_image_dep = cc.find_library('SDL3_image', required: false)
 endif
+imlib2_dep = dependency('imlib2', required: false)
 sdl3_ttf_dep = dependency('SDL3_ttf', required: true)
 libzip_dep = dependency('libzip', required: true)
 gio_dep = dependency('gio-2.0', version: '>=2.72', required: true)
@@ -52,8 +53,12 @@ if image_backend_opt == 'sdl_image' and not sdl3_image_dep.found()
   error('image_backend=sdl_image requested but SDL3_image was not found')
 endif
 
-if image_backend_opt == 'auto' and not freeimage_dep.found() and not sdl3_image_dep.found()
-  error('No image backend found. Install FreeImage and/or SDL3_image')
+if image_backend_opt == 'imlib2' and not imlib2_dep.found()
+  error('image_backend=imlib2 requested but Imlib2 was not found')
+endif
+
+if image_backend_opt == 'auto' and not freeimage_dep.found() and not sdl3_image_dep.found() and not imlib2_dep.found()
+  error('No image backend found. Install FreeImage, SDL3_image, and/or Imlib2')
 endif
 
 # MuPDF (optional – enables the MuPDF PDF rendering backend)
@@ -91,6 +96,11 @@ endif
 if sdl3_image_dep.found()
   add_project_arguments('-DHAVE_SDL_IMAGE3', language: ['c', 'cpp'])
   dependencies += [sdl3_image_dep]
+endif
+
+if imlib2_dep.found()
+  add_project_arguments('-DHAVE_IMLIB2', language: ['c', 'cpp'])
+  dependencies += [imlib2_dep]
 endif
 
 if mupdf_dep.found()
@@ -250,6 +260,7 @@ summary({
 summary({
   'SDL3': sdl3_dep.found(),
   'SDL3_image': sdl3_image_dep.found(),
+  'Imlib2': imlib2_dep.found(),
   'SDL3_ttf': sdl3_ttf_dep.found(),
   'libzip': libzip_dep.found(),
   'FreeImage': freeimage_dep.found(),

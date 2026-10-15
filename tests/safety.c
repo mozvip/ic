@@ -32,6 +32,27 @@ static void make_image(const char *path) {
     SDL_DestroySurface(surface);
 }
 
+static void test_imlib2_backend(void) {
+    if (!image_loader_backend_available(IMAGE_BACKEND_IMLIB2)) return;
+
+    assert(image_loader_parse_backend("imlib2") == IMAGE_BACKEND_IMLIB2);
+    assert(strcmp(image_loader_backend_name(IMAGE_BACKEND_IMLIB2), "imlib2") == 0);
+
+    char path[PATH_MAX];
+    snprintf(path, sizeof(path), "%s/imlib2.bmp", sandbox);
+    make_image(path);
+
+    ImageBackend previous = image_loader_parse_backend(SDL_getenv("IC_IMAGE_BACKEND"));
+    if (previous == IMAGE_BACKEND_COUNT) previous = IMAGE_BACKEND_AUTO;
+    assert(image_loader_set_preferred_backend(IMAGE_BACKEND_IMLIB2));
+    assert(image_loader_get_active_backend() == IMAGE_BACKEND_IMLIB2);
+    SDL_Surface *surface = image_load_surface(path, NULL);
+    assert(surface && surface->w == 16 && surface->h == 16);
+    SDL_DestroySurface(surface);
+    assert(image_loader_set_preferred_backend(previous));
+    assert(remove(path) == 0);
+}
+
 static void make_archive(const char *path, int count, const char *first_name) {
     int error = 0;
     zip_t *archive = zip_open(path, ZIP_CREATE | ZIP_EXCL, &error);
@@ -620,6 +641,12 @@ int main(void) {
     assert(system_font);
     TTF_CloseFont(system_font);
     assert(image_loader_init());
+    const char *requested_backend = SDL_getenv("IC_IMAGE_BACKEND");
+    if (image_loader_backend_available(IMAGE_BACKEND_IMLIB2) &&
+        (!requested_backend || image_loader_parse_backend(requested_backend) == IMAGE_BACKEND_AUTO)) {
+        assert(image_loader_get_active_backend() == IMAGE_BACKEND_IMLIB2);
+    }
+    test_imlib2_backend();
     viewer.preload_event_type = SDL_RegisterEvents(1);
     assert(viewer.preload_event_type != (Uint32)-1);
     viewer.window = SDL_CreateWindow("safety", 640, 480, 0);

@@ -404,10 +404,11 @@ static void imgui_layer_build_ui(void) {
             static const char *backend_labels[] = {
                 "Auto",
                 "FreeImage",
-                "SDL_image"
+                "SDL_image",
+                "Imlib2"
             };
 
-            bool selectable[IMAGE_BACKEND_COUNT] = {true, true, true};
+            bool selectable[IMAGE_BACKEND_COUNT] = {true, true, true, true};
             for (int i = 1; i < (int)IMAGE_BACKEND_COUNT; ++i) {
                 selectable[i] = image_loader_backend_available((ImageBackend)i);
             }

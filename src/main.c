@@ -23,7 +23,7 @@ void print_usage(const char *program_name) {
     printf("  --accessible  Open native screen-reader-accessible reading controls\n");
     printf("  -m, --monitor <index>  Display index, or -1 for the primary display (default)\n");
     printf("  --overlay <mode>       Specify overlay mode: gradient (default), stretched, ambilight\n");
-    printf("  --image-backend <name> Select image backend: auto, freeimage, sdl_image\n");
+    printf("  --image-backend <name> Select image backend: auto, freeimage, sdl_image, imlib2\n");
     printf("\n");
     printf("Supported formats:\n");
     printf("  - CBZ files (Comic ZIP archives)\n");
@@ -80,7 +80,7 @@ int main(int argc, char *argv[]) {
 
     if (image_backend && !comic_viewer_set_image_backend(image_backend)) {
         fprintf(stderr,
-                "Invalid or unavailable image backend '%s' (expected auto, freeimage, or sdl_image)\n",
+                "Invalid or unavailable image backend '%s' (expected auto, freeimage, sdl_image, or imlib2)\n",
                 image_backend);
         return 1;
     }

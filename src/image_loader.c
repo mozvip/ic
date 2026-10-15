@@ -13,6 +13,10 @@
 #include <SDL3_image/SDL_image.h>
 #endif
 
+#if defined(HAVE_IMLIB2)
+#include <Imlib2.h>
+#endif
+
 static bool loader_initialized = false;
 #if defined(HAVE_FREEIMAGE)
 static bool freeimage_initialized = false;
@@ -41,7 +45,17 @@ static ImageBackend choose_backend(ImageBackend preferred) {
         return IMAGE_BACKEND_AUTO;
     }
 
-    // AUTO: prefer FreeImage first, then SDL_image.
+    if (preferred == IMAGE_BACKEND_IMLIB2) {
+        if (image_loader_backend_available(IMAGE_BACKEND_IMLIB2)) {
+            return IMAGE_BACKEND_IMLIB2;
+        }
+        return IMAGE_BACKEND_AUTO;
+    }
+
+    // AUTO prefers Imlib2, with the other decoders as fallbacks.
+    if (image_loader_backend_available(IMAGE_BACKEND_IMLIB2)) {
+        return IMAGE_BACKEND_IMLIB2;
+    }
     if (image_loader_backend_available(IMAGE_BACKEND_FREEIMAGE)) {
         return IMAGE_BACKEND_FREEIMAGE;
     }
@@ -267,6 +281,76 @@ static SDL_Surface *load_surface_sdl_image(const char *filename, ImageProcessing
 #endif
 }
 
+static SDL_Surface *load_surface_imlib2(const char *filename, ImageProcessingOptions *options) {
+#if defined(HAVE_IMLIB2)
+    Imlib_Image image = imlib_load_image(filename);
+    if (!image) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to load image with Imlib2: %s", filename);
+        return NULL;
+    }
+
+    imlib_context_set_image(image);
+    int width = imlib_image_get_width();
+    int height = imlib_image_get_height();
+    uint32_t *pixels = imlib_image_get_data_for_reading_only();
+    if (width <= 0 || height <= 0 || !pixels) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Invalid image data from Imlib2: %s", filename);
+        imlib_free_image();
+        return NULL;
+    }
+
+    SDL_Surface *surface = SDL_CreateSurface(width, height, SDL_PIXELFORMAT_ARGB8888);
+    if (!surface) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create Imlib2 SDL surface for %s: %s",
+                     filename, SDL_GetError());
+        imlib_free_image();
+        return NULL;
+    }
+
+    if (!SDL_LockSurface(surface)) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to lock Imlib2 SDL surface for %s: %s",
+                     filename, SDL_GetError());
+        SDL_DestroySurface(surface);
+        imlib_free_image();
+        return NULL;
+    }
+
+    size_t row_bytes = (size_t)width * sizeof(*pixels);
+    for (int y = 0; y < height; ++y) {
+        memcpy((unsigned char *)surface->pixels + (size_t)y * (size_t)surface->pitch,
+               pixels + (size_t)y * (size_t)width, row_bytes);
+    }
+    SDL_UnlockSurface(surface);
+    imlib_free_image();
+
+    if (options && (options->enhancement_enabled || options->color_filter != COLOR_FILTER_NONE)) {
+        auto_enhance_image(surface, options);
+    }
+
+    return surface;
+#else
+    (void)filename;
+    (void)options;
+    return NULL;
+#endif
+}
+
+static SDL_Surface *load_surface_with_backend(ImageBackend backend, const char *filename,
+                                               ImageProcessingOptions *options) {
+    switch (backend) {
+        case IMAGE_BACKEND_FREEIMAGE:
+            return load_surface_freeimage(filename, options);
+        case IMAGE_BACKEND_SDL_IMAGE:
+            return load_surface_sdl_image(filename, options);
+        case IMAGE_BACKEND_IMLIB2:
+            return load_surface_imlib2(filename, options);
+        case IMAGE_BACKEND_AUTO:
+        case IMAGE_BACKEND_COUNT:
+        default:
+            return NULL;
+    }
+}
+
 bool image_loader_backend_available(ImageBackend backend) {
     switch (backend) {
         case IMAGE_BACKEND_FREEIMAGE:
@@ -277,6 +361,12 @@ bool image_loader_backend_available(ImageBackend backend) {
 #endif
         case IMAGE_BACKEND_SDL_IMAGE:
 #if defined(HAVE_SDL_IMAGE3)
+            return true;
+#else
+            return false;
+#endif
+        case IMAGE_BACKEND_IMLIB2:
+#if defined(HAVE_IMLIB2)
             return true;
 #else
             return false;
@@ -296,6 +386,8 @@ const char *image_loader_backend_name(ImageBackend backend) {
             return "freeimage";
         case IMAGE_BACKEND_SDL_IMAGE:
             return "sdl_image";
+        case IMAGE_BACKEND_IMLIB2:
+            return "imlib2";
         case IMAGE_BACKEND_COUNT:
         default:
             return "unknown";
@@ -314,6 +406,9 @@ ImageBackend image_loader_parse_backend(const char *name) {
     }
     if (strcasecmp(name, "sdl_image") == 0 || strcasecmp(name, "sdl-image") == 0 || strcasecmp(name, "sdlimage") == 0) {
         return IMAGE_BACKEND_SDL_IMAGE;
+    }
+    if (strcasecmp(name, "imlib2") == 0 || strcasecmp(name, "imlib") == 0) {
+        return IMAGE_BACKEND_IMLIB2;
     }
     return IMAGE_BACKEND_COUNT;
 }
@@ -356,7 +451,7 @@ bool image_loader_init(void) {
             preferred_backend = env_parsed;
         } else {
             SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-                        "Ignoring invalid IC_IMAGE_BACKEND='%s' (expected auto|freeimage|sdl_image)",
+                        "Ignoring invalid IC_IMAGE_BACKEND='%s' (expected auto|freeimage|sdl_image|imlib2)",
                         env_backend);
         }
     }
@@ -370,7 +465,7 @@ bool image_loader_init(void) {
     ImageBackend chosen = choose_backend(preferred_backend);
     if (chosen == IMAGE_BACKEND_AUTO) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-                     "No image backend available. Build with FreeImage and/or SDL3_image.");
+                     "No image backend available. Build with FreeImage, SDL3_image, or Imlib2.");
 #if defined(HAVE_FREEIMAGE)
         if (freeimage_initialized) {
             FreeImage_DeInitialise();
@@ -403,21 +498,21 @@ SDL_Surface *image_load_surface(const char *filename, ImageProcessingOptions *op
         return NULL;
     }
 
-    // First try active backend.
-    SDL_Surface *surface = NULL;
-    if (active_backend == IMAGE_BACKEND_FREEIMAGE) {
-        surface = load_surface_freeimage(filename, options);
-        if (!surface && image_loader_backend_available(IMAGE_BACKEND_SDL_IMAGE)) {
-            surface = load_surface_sdl_image(filename, options);
-        }
-    } else if (active_backend == IMAGE_BACKEND_SDL_IMAGE) {
-        surface = load_surface_sdl_image(filename, options);
-        if (!surface && image_loader_backend_available(IMAGE_BACKEND_FREEIMAGE)) {
-            surface = load_surface_freeimage(filename, options);
-        }
+    SDL_Surface *surface = load_surface_with_backend(active_backend, filename, options);
+    if (surface) {
+        return surface;
     }
 
-    return surface;
+    for (ImageBackend backend = IMAGE_BACKEND_FREEIMAGE; backend < IMAGE_BACKEND_COUNT; ++backend) {
+        if (backend == active_backend || !image_loader_backend_available(backend)) {
+            continue;
+        }
+        surface = load_surface_with_backend(backend, filename, options);
+        if (surface) {
+            return surface;
+        }
+    }
+    return NULL;
 }
 
 bool image_loader_exif_available(void) {
