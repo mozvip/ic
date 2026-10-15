@@ -83,12 +83,16 @@ ArchiveHandle* cbz_open(const char *path, int *total_images, ProgressCallback pr
     // Initialize archive mutex for thread-safe access
     handle->archive_mutex = SDL_CreateMutex();
     if (!handle->archive_mutex) {
-        fprintf(stderr, "Warning: failed to create archive mutex: %s\n", SDL_GetError());
-        // continue without mutex, but risk races
+        cbz_close(handle);
+        return NULL;
     }
     
     // First pass - count image files and collect names
     char **image_entries = (char**)malloc(num_entries * sizeof(char*));
+    if (!image_entries) {
+        cbz_close(handle);
+        return NULL;
+    }
     int count = 0;
     
     for (zip_int64_t i = 0; i < num_entries; i++) {
@@ -104,10 +108,11 @@ ArchiveHandle* cbz_open(const char *path, int *total_images, ProgressCallback pr
         }
         
         // Update progress
-        if (progress_cb && i % 10 == 0) {
-            float progress = 0.2f + (0.7f * (float)i / num_entries);
+        if (progress_cb) {
+            float progress = 0.2f + (0.6f * (float)(i + 1) / num_entries);
             char msg[256];
-            snprintf(msg, sizeof(msg), "Scanning archive (%d/%d)...", (int)i, (int)num_entries);
+            snprintf(msg, sizeof(msg), "Scanning archive (%lld/%lld)...",
+                     (long long)(i + 1), (long long)num_entries);
             progress_cb(progress, msg);
         }
     }
@@ -120,6 +125,7 @@ ArchiveHandle* cbz_open(const char *path, int *total_images, ProgressCallback pr
     }
     
     // Sort entries by name
+    if (progress_cb) progress_cb(0.85f, "Sorting archive pages...");
     qsort(image_entries, count, sizeof(char *), image_name_compare);
     
     // Store the count and entries in the handle
@@ -127,6 +133,7 @@ ArchiveHandle* cbz_open(const char *path, int *total_images, ProgressCallback pr
     handle->entry_names = image_entries;
     
     *total_images = count;
+    if (progress_cb) progress_cb(0.95f, "Preparing archive index...");
     
     if (progress_cb) {
         progress_cb(1.0f, "Archive ready.");
@@ -144,34 +151,25 @@ bool cbz_get_image(ArchiveHandle *handle, int index, char **out_path) {
     struct zip *zip_archive = (struct zip*)handle->archive_ptr;
     const char *entry_name = handle->entry_names[index];
      
-    // Construct the output path
     char output_path[512];
-    snprintf(output_path, sizeof(output_path), "%s/%s", handle->temp_dir, entry_name);
-    
-    // Check if the file already exists
+    const char *extension = strrchr(get_filename_from_path(entry_name), '.');
+    int path_length = snprintf(output_path, sizeof(output_path), "%s/page_%d%s",
+                               handle->temp_dir, index, extension ? extension : "");
+    if (path_length < 0 || (size_t)path_length >= sizeof(output_path)) {
+        return false;
+    }
+
+    SDL_LockMutex(handle->archive_mutex);
     if (access(output_path, F_OK) == 0) {
-        // File already exists, no need to extract again
         *out_path = strdup(output_path);
-        
-        return true;
+        SDL_UnlockMutex(handle->archive_mutex);
+        return *out_path != NULL;
     }
-    
-    // Create subdirectories if needed
-    char *dir_part = strdup(output_path);
-    char *last_slash = strrchr(dir_part, '/');
-    if (last_slash) {
-        *last_slash = '\0';
-        const char *args[] = {"mkdir", "-p", dir_part, NULL};
-        execute_process(args, false, NULL);
-    }
-    free(dir_part);
-    
-    // Open the file in the archive (thread-safe)
-    if (handle->archive_mutex) SDL_LockMutex(handle->archive_mutex);
+
     struct zip_file *zip_file = zip_fopen(zip_archive, entry_name, 0);
     if (!zip_file) {
         fprintf(stderr, "Failed to open file in ZIP archive: %s\n", entry_name);
-        if (handle->archive_mutex) SDL_UnlockMutex(handle->archive_mutex);
+        SDL_UnlockMutex(handle->archive_mutex);
         return false;
     }
     
@@ -180,33 +178,34 @@ bool cbz_get_image(ArchiveHandle *handle, int index, char **out_path) {
     if (!out_file) {
         fprintf(stderr, "Failed to create output file: %s\n", output_path);
         zip_fclose(zip_file);
-        
+        SDL_UnlockMutex(handle->archive_mutex);
         return false;
     }
     
     // Copy data from zip to file
     char buffer[8192];
     zip_int64_t bytes_read;
+    bool ok = true;
     
     while ((bytes_read = zip_fread(zip_file, buffer, sizeof(buffer))) > 0) {
-        fwrite(buffer, 1, bytes_read, out_file);
+        if (fwrite(buffer, 1, (size_t)bytes_read, out_file) != (size_t)bytes_read) {
+            ok = false;
+            break;
+        }
     }
-    
-    // Close files
-    fclose(out_file);
-    zip_fclose(zip_file);
-    
-    // Check for read errors
-    if (bytes_read < 0) {
-        fprintf(stderr, "Error reading from ZIP archive\n");
-        if (handle->archive_mutex) SDL_UnlockMutex(handle->archive_mutex);
-        return false;
+
+    if (bytes_read < 0) ok = false;
+    if (fclose(out_file) != 0) ok = false;
+    if (zip_fclose(zip_file) != 0) ok = false;
+    if (ok) {
+        *out_path = strdup(output_path);
+        ok = *out_path != NULL;
+    } else {
+        remove(output_path);
     }
-    
-    if (handle->archive_mutex) SDL_UnlockMutex(handle->archive_mutex);
-    *out_path = strdup(output_path);
-    
-    return true;
+
+    SDL_UnlockMutex(handle->archive_mutex);
+    return ok;
 }
 
 void cbz_close(ArchiveHandle *handle) {

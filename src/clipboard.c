@@ -15,6 +15,11 @@
 
 extern struct ViewerState viewer;
 
+typedef struct ClipboardImage {
+    void *data;
+    size_t size;
+} ClipboardImage;
+
 // Helper function to load PNG from file into memory
 static void *load_file_to_memory(const char *filename, size_t *out_size) {
     FILE *fp = fopen(filename, "rb");
@@ -147,23 +152,7 @@ static void *save_png_sdl_image(SDL_Surface *surface, size_t *out_size) {
 #endif
 }
 
-static const void *get_clipboard_data(void *userdata, const char *mime_type, size_t *size) {
-    if (strcmp(mime_type, "image/png") != 0) {
-        return NULL;
-    }
-
-    ImageView *image_view = (ImageView *)userdata;
-    if (!image_view) {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "No image view available for clipboard data\n");
-        return NULL;
-    }
-
-    SDL_Surface *surface = image_view->surface;
-    if (!surface) {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "No surface available in image view for clipboard data\n");
-        return NULL;
-    }
-
+static void *encode_clipboard_image(SDL_Surface *surface, size_t *size) {
     // Get the active image backend and use it dynamically
     ImageBackend backend = image_loader_get_active_backend();
 
@@ -199,23 +188,40 @@ static const void *get_clipboard_data(void *userdata, const char *mime_type, siz
     return png_data;
 }
 
+static const void *get_clipboard_data(void *userdata, const char *mime_type, size_t *size) {
+    if (size) *size = 0;
+    ClipboardImage *image = userdata;
+    if (!image || !mime_type || !size || strcmp(mime_type, "image/png") != 0) {
+        return NULL;
+    }
+    *size = image->size;
+    return image->data;
+}
+
 static void cleanup_clipboard_data(void *userdata) {
-    free(userdata);
+    ClipboardImage *image = userdata;
+    if (image) {
+        free(image->data);
+        free(image);
+    }
 }
 
 // Copy the currently displayed view (after cropping, combined pages) to the system clipboard
 void copy_current_view_to_clipboard(void) {
-    if (!viewer.current_view_node) return;
+    if (!viewer.current_view_node || !viewer.current_view_node->surface) return;
     ImageView *view = viewer.current_view_node;
 
-    const char **mime_types = malloc(1 * sizeof(char*));
-    if (!mime_types) return;
-    mime_types[0] = strdup("image/png");
-    int num_mime_types = 1;
+    ClipboardImage *image = calloc(1, sizeof(*image));
+    if (!image) return;
+    image->data = encode_clipboard_image(view->surface, &image->size);
+    if (!image->data) {
+        cleanup_clipboard_data(image);
+        return;
+    }
 
-    if (!SDL_SetClipboardData(get_clipboard_data, cleanup_clipboard_data, view, mime_types, num_mime_types)) {
+    const char *mime_types[] = {"image/png"};
+    if (!SDL_SetClipboardData(get_clipboard_data, cleanup_clipboard_data, image, mime_types, 1)) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to set clipboard image data: %s", SDL_GetError());
-        free((void *)mime_types[0]);
-        free(mime_types);
+        cleanup_clipboard_data(image);
     }
 }

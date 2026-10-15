@@ -229,6 +229,8 @@ extern "C" void file_browser_close(void) {
 }
 
 static void fb_unload_current_comic(void) {
+    comic_viewer_finish_loading();
+    comic_viewer_save_reading_position();
     for (int i = 0; i < viewer.image_count; i++) {
         if (viewer.images[i].surface) {
             SDL_DestroySurface(viewer.images[i].surface);
@@ -244,6 +246,7 @@ static void fb_unload_current_comic(void) {
         if (v->texture) {
             SDL_DestroyTexture(v->texture);
         }
+        SDL_DestroySurface(v->surface);
         free(v);
         v = n;
     }

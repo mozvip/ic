@@ -5,59 +5,50 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+
 jobs:
   release:
-    runs-on: ubuntu-latest
-    
+    runs-on: ubuntu-24.04
+    container: ubuntu:26.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
     steps:
-      - uses: actions/checkout@v4
-      
       - name: Install Dependencies
         run: |
-          sudo apt-get -y update
-          sudo apt-get -y install build-essential make libzip-dev libcurl4-openssl-dev libexif-dev libxinerama-dev
-          # Add FreeImage library
-          sudo apt-get -y install libfreeimage-dev
-      
-      - name: Build Release Binaries
-        run: |
-          # Build with all features enabled
-          make curl=1 exif=1 inotify=1 verscmp=1 xinerama=1
-          mv ic ic-full
-          make clean
-          
-          # Build minimal version
-          make curl=0 exif=0 inotify=0 verscmp=0 xinerama=0
-          mv ic ic-minimal
-          make clean
-      
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates git build-essential cmake meson ninja-build pkg-config \
+            libsdl3-dev libsdl3-ttf-dev libsdl3-image-dev libzip-dev \
+            libfreeimage-dev glslc poppler-utils fonts-dejavu-core
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: meson setup builddir --buildtype=release -Dimage_backend=auto
+      - name: Build
+        run: meson compile -C builddir
+      - name: Test
+        run: meson test -C builddir --print-errorlogs
       - name: Create Release Archive
         run: |
           mkdir -p release
-          cp ic-full release/
-          cp ic-minimal release/
-          cp README.md release/ 2>/dev/null || echo "README.md not found"
-          cp LICENSE release/ 2>/dev/null || echo "LICENSE not found"
-          tar -czf ic-${{ github.ref_name }}-linux.tar.gz -C release .
-      
+          cp builddir/ic README.md LICENSE release/
+          tar -czf "ic-${GITHUB_REF_NAME}-linux.tar.gz" -C release .
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
-          files: |
-            ic-${{ github.ref_name }}-linux.tar.gz
+          files: ic-${{ github.ref_name }}-linux.tar.gz
           body: |
             Release ${{ github.ref_name }}
-            
-            ## Binaries included:
-            - `ic-full`: Built with all features (curl, exif, inotify, verscmp, xinerama)
-            - `ic-minimal`: Built with minimal features
-            
-            ## Installation:
-            ```bash
+
+            Linux x86_64 binary built on Ubuntu 26.04 using Meson.
+            Requires SDL3, SDL3_ttf, SDL3_image, libzip, and FreeImage runtime libraries.
+            PDF support uses Poppler utilities; CBR support requires unrar.
+            The native archive does not bundle these dependencies.
+
+            ```sh
             tar -xzf ic-${{ github.ref_name }}-linux.tar.gz
-            chmod +x ic-full ic-minimal
+            ./ic <comic-file-or-directory>
             ```
           draft: false
           prerelease: ${{ contains(github.ref_name, 'rc') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

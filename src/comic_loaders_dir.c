@@ -32,8 +32,13 @@ bool load_directory(const char *path, ImageEntry *images, int *image_count, int 
         return false;
     }
     
-    // First pass: collect image paths
+    size_t total_entries = 0;
+    while (readdir(dir) != NULL) total_entries++;
+    rewinddir(dir);
+    if (progress_cb) progress_cb(0.1f, "Collecting image paths...");
+    size_t scanned_entries = 0;
     while ((entry = readdir(dir)) != NULL && count < max_images) {
+        scanned_entries++;
         if (entry->d_type == DT_REG && is_image_file(entry->d_name)) {
             char *full_path = malloc(strlen(path) + strlen(entry->d_name) + 2); // +2 for '/' and null terminator
             if (!full_path) continue;
@@ -41,12 +46,14 @@ bool load_directory(const char *path, ImageEntry *images, int *image_count, int 
             sprintf(full_path, "%s/%s", path, entry->d_name);
             image_paths[count++] = full_path;
             
-            // Update progress while scanning
-            if (progress_cb && count % 5 == 0) {  // Update every 5 images to avoid too frequent updates
-                char msg[256];
-                snprintf(msg, sizeof(msg), "Found %d images...", count);
-                progress_cb(0.5f, msg);  // Use 0.5 as we're in the scanning phase
-            }
+        }
+        if (progress_cb) {
+            float fraction = total_entries ? (float)scanned_entries / total_entries : 1.0f;
+            if (fraction > 1.0f) fraction = 1.0f;
+            char msg[256];
+            snprintf(msg, sizeof(msg), "Scanning directory (%zu/%zu entries, %d images)...",
+                     scanned_entries, total_entries, count);
+            progress_cb(0.1f + 0.55f * fraction, msg);
         }
     }
     
@@ -67,13 +74,18 @@ bool load_directory(const char *path, ImageEntry *images, int *image_count, int 
     qsort(image_paths, count, sizeof(char *), image_name_compare);
     
     if (progress_cb) {
-        progress_cb(0.9f, "Preparing image data...");
+        progress_cb(0.8f, "Preparing image data...");
     }
     
     // Store sorted images
     for (int i = 0; i < count; i++) {
         images[i].path = image_paths[i];
         images[i].surface = NULL;  // Initialize surface to NULL
+        if (progress_cb) {
+            char msg[128];
+            snprintf(msg, sizeof(msg), "Preparing image (%d/%d)...", i + 1, count);
+            progress_cb(0.8f + 0.18f * (float)(i + 1) / count, msg);
+        }
     }
     
     *image_count = count;

@@ -183,6 +183,8 @@ bool comic_viewer_set_image_backend(const char *backend_name);
 
 // Reload currently visible view so runtime decoder/processing changes apply immediately.
 void comic_viewer_reload_current_view(void);
+void comic_viewer_finish_loading(void);
+void comic_viewer_save_reading_position(void);
 
 // Load a comic file or directory
 bool comic_viewer_load(const char *path);

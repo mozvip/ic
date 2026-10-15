@@ -22,6 +22,7 @@ static struct {
     SDL_Renderer *renderer;
     TTF_Font *font;
     float progress;
+    Uint64 last_render_ns;
     char message[256];
     int window_width;
     int window_height;
@@ -53,6 +54,7 @@ bool progress_bar_init(SDL_Renderer *renderer) {
     
     progress_bar.renderer = renderer;
     progress_bar.progress = 0.0f;
+    progress_bar.last_render_ns = 0;
     strcpy(progress_bar.message, "Loading...");
     progress_bar.initialized = true;
     
@@ -65,6 +67,7 @@ void progress_bar_update(float progress, const char *message) {
     // Clamp progress value between 0 and 1
     if (progress < 0.0f) progress = 0.0f;
     if (progress > 1.0f) progress = 1.0f;
+    if (progress > 0.0f && progress < progress_bar.progress) progress = progress_bar.progress;
     
     progress_bar.progress = progress;
     if (message) {
@@ -72,12 +75,22 @@ void progress_bar_update(float progress, const char *message) {
         progress_bar.message[sizeof(progress_bar.message) - 1] = '\0';
     }
     
-    // Render the progress bar immediately
-    progress_bar_render();
+    Uint64 now = SDL_GetTicksNS();
+    if (progress == 0.0f || progress == 1.0f ||
+        now - progress_bar.last_render_ns >= SDL_NS_PER_SECOND / 60) {
+        progress_bar_render();
+    }
 }
 
 void progress_bar_render(void) {
     if (!progress_bar.initialized) return;
+    SDL_RendererLogicalPresentation presentation;
+    if (!SDL_GetRenderLogicalPresentation(progress_bar.renderer,
+                                          &progress_bar.window_width, &progress_bar.window_height,
+                                          &presentation) || presentation == SDL_LOGICAL_PRESENTATION_DISABLED) {
+        if (!SDL_GetRenderOutputSize(progress_bar.renderer,
+                                    &progress_bar.window_width, &progress_bar.window_height)) return;
+    }
     
     // Clear the screen
     SDL_SetRenderDrawColor(progress_bar.renderer, 0, 0, 0, 255);
@@ -162,6 +175,7 @@ void progress_bar_render(void) {
     
     // Present the renderer
     SDL_RenderPresent(progress_bar.renderer);
+    progress_bar.last_render_ns = SDL_GetTicksNS();
     
     // Process events during rendering to keep the UI responsive
     SDL_Event event;

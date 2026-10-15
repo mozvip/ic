@@ -6,6 +6,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
+#include <errno.h>
 #include <dirent.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -64,10 +66,11 @@ static void generate_default_views(void);
 static void go_to_previous_view(void);
 static void go_to_next_view(void);
 void free_view_texture(ImageView *view) ;
-static void viewer_state_save_current(void);
 static void viewer_state_restore_for_source(void);
 
 static SDL_Renderer *create_renderer_prefer_gpu_vulkan(SDL_Window *window);
+// Provided by comic_loaders_utils.c
+extern const char* get_filename_from_path(const char* path);
 // File browser (separate module)
 #include "file_browser.h"
 
@@ -248,7 +251,7 @@ static void viewer_state_restore_for_source(void) {
     }
 }
 
-static void viewer_state_save_current(void) {
+void comic_viewer_save_reading_position(void) {
     if (!viewer.source_path || viewer.view_count <= 0 || !viewer.current_view_node) {
         return;
     }
@@ -320,6 +323,7 @@ bool comic_viewer_set_image_backend(const char *backend_name) {
     if (backend == IMAGE_BACKEND_COUNT) {
         return false;
     }
+    comic_viewer_finish_loading();
     return image_loader_set_preferred_backend(backend);
 }
 
@@ -349,25 +353,12 @@ static void remove_current_view(void) {
         return;
     }
     
+    comic_viewer_finish_loading();
     ImageView *view_to_remove = viewer.current_view_node;
     ImageView *next_view = view_to_remove->next;
     ImageView *prev_view = view_to_remove->prev;
 
-    if (viewer.current_view_node->texture) {
-        SDL_DestroyTexture(viewer.current_view_node->texture);
-        viewer.current_view_node->texture = NULL;
-    }
-    
-    // Unload any images from the view being removed
-    for (int i = 0; i < view_to_remove->count; i++) {
-        int image_index = view_to_remove->image_indices[i];
-        if (image_index >= 0 && image_index < viewer.image_count) {
-            if (viewer.images[image_index].surface) {
-                SDL_DestroySurface(viewer.images[image_index].surface);
-                viewer.images[image_index].surface = NULL;
-            }
-        }
-    }
+    unload_view(view_to_remove);
     
     // Update linked list connections
     if (prev_view) {
@@ -408,15 +399,171 @@ static void remove_current_view(void) {
     }
 }
 
-bool comic_viewer_init(int monitor_index) {
-    // Set the video driver hint to Wayland before initializing SDL
-    if (SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "wayland") == 0) {
-        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Warning: Failed to set Wayland video driver hint: %s", SDL_GetError());
+// ---------------- Delete from disk (directory mode) ----------------
+
+// Window during which a second Delete press confirms the erase.
+#define DELETE_CONFIRM_MS 3000
+
+// Path armed by the first Delete press; the second press only commits if the
+// current view still shows this exact file.
+static char delete_confirm_path[PATH_MAX];
+static Uint64 delete_confirm_until = 0;
+
+static void set_transient_status(const char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    SDL_vsnprintf(viewer.gamepad_status_msg, sizeof(viewer.gamepad_status_msg), fmt, args);
+    va_end(args);
+    viewer.gamepad_status_until = SDL_GetTicks() + 3000;
+}
+
+void comic_viewer_finish_loading(void) {
+    if (viewer.load_thread) {
+        SDL_WaitThread(viewer.load_thread, NULL);
+        viewer.load_thread = NULL;
     }
-    
-    // Enable HiDPI scaling
-    SDL_SetHint("SDL_WINDOW_ALLOW_HIGHDPI", "1");
-    
+    SDL_Event events[16];
+    if (viewer.preload_event_type >= SDL_EVENT_USER) {
+        int count;
+        while ((count = SDL_PeepEvents(events, 16, SDL_GETEVENT,
+                                       viewer.preload_event_type, viewer.preload_event_type)) > 0) {
+            for (int i = 0; i < count; i++) {
+                PreloadResult *res = events[i].user.data1;
+                if (res && res->generation == SDL_GetAtomicInt(&viewer.load_generation) &&
+                    res->view && viewer.renderer) {
+                    create_texture(viewer.renderer, res->view);
+                }
+                free(res);
+            }
+        }
+    }
+    SDL_AddAtomicInt(&viewer.load_generation, 1);
+}
+
+// Drop images[index] from the flat page array and shift the tail down, fixing up
+// every view index that pointed past it. Callers must already have detached any
+// view referencing the entry.
+static void remove_image_entry(int index) {
+    if (index < 0 || index >= viewer.image_count) return;
+
+    free(viewer.images[index].path);
+    if (viewer.images[index].surface) {
+        SDL_DestroySurface(viewer.images[index].surface);
+    }
+
+    for (int i = index; i < viewer.image_count - 1; i++) {
+        viewer.images[i] = viewer.images[i + 1];
+    }
+    viewer.image_count--;
+    memset(&viewer.images[viewer.image_count], 0, sizeof(ImageEntry));
+
+    for (ImageView *view = viewer.first_view; view; view = view->next) {
+        for (int i = 0; i < view->count; i++) {
+            if (view->image_indices[i] > index) {
+                view->image_indices[i]--;
+            }
+        }
+    }
+}
+
+// Directory mode only: unlink the file(s) backing the current view, then drop the
+// view. This is irreversible (no trash can), so the first Delete press only arms
+// the action and the second one within DELETE_CONFIRM_MS commits it.
+static void delete_current_view_from_disk(void) {
+    ImageView *view = viewer.current_view_node;
+    if (!view || view->count <= 0) return;
+
+    const char *first_path = viewer.images[view->image_indices[0]].path;
+    if (!first_path) return;
+
+    if (viewer.view_count <= 1) {
+        set_transient_status("Cannot delete the last remaining image");
+        return;
+    }
+
+    Uint64 now = SDL_GetTicks();
+    bool armed = now <= delete_confirm_until &&
+                 strcmp(delete_confirm_path, first_path) == 0;
+    if (!armed) {
+        SDL_strlcpy(delete_confirm_path, first_path, sizeof(delete_confirm_path));
+        delete_confirm_until = now + DELETE_CONFIRM_MS;
+        if (view->count > 1) {
+            set_transient_status("Press Delete again to erase %d files from disk", view->count);
+        } else {
+            set_transient_status("Press Delete again to erase %s from disk",
+                                 get_filename_from_path(first_path));
+        }
+        return;
+    }
+    delete_confirm_until = 0;
+    delete_confirm_path[0] = '\0';
+
+    // A worker may still be decoding these images; join it before unlinking so it
+    // never reads viewer.images[] entries we are about to tear down.
+    comic_viewer_finish_loading();
+
+    // Snapshot the indices in descending order so compacting the array below
+    // never invalidates an index we have not handled yet.
+    int indices[MAX_IMAGES_PER_VIEW];
+    int index_count = view->count;
+    for (int i = 0; i < index_count; i++) {
+        indices[i] = view->image_indices[i];
+    }
+    for (int i = 0; i < index_count - 1; i++) {
+        for (int j = i + 1; j < index_count; j++) {
+            if (indices[j] > indices[i]) {
+                int tmp = indices[i];
+                indices[i] = indices[j];
+                indices[j] = tmp;
+            }
+        }
+    }
+
+    bool unlinked[MAX_IMAGES_PER_VIEW] = { false };
+    int deleted_count = 0;
+    char last_error[256] = "";
+    char last_name[256] = "";
+    for (int i = 0; i < index_count; i++) {
+        const char *path = viewer.images[indices[i]].path;
+        if (!path) continue;
+        if (remove(path) != 0) {
+            snprintf(last_error, sizeof(last_error), "%s: %s",
+                     get_filename_from_path(path), strerror(errno));
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to delete %s: %s", path, strerror(errno));
+            continue;
+        }
+        unlinked[i] = true;
+        deleted_count++;
+        snprintf(last_name, sizeof(last_name), "%s", get_filename_from_path(path));
+    }
+
+    if (deleted_count == 0) {
+        set_transient_status("Delete failed - %s", last_error);
+        return;
+    }
+
+    // Detach the view first, then compact the entries whose file is really gone.
+    remove_current_view();
+    for (int i = 0; i < index_count; i++) {
+        if (unlinked[i]) {
+            remove_image_entry(indices[i]);
+        }
+    }
+
+    if (viewer.current_view_node && !viewer.current_view_node->texture) {
+        load_view(viewer.current_view_node);
+    }
+
+    if (last_error[0] != '\0') {
+        set_transient_status("Deleted %d file(s), failed on %s", deleted_count, last_error);
+    } else if (deleted_count > 1) {
+        set_transient_status("Deleted %d files from disk", deleted_count);
+    } else {
+        set_transient_status("Deleted %s", last_name);
+    }
+}
+
+bool comic_viewer_init(int monitor_index) {
     // Set best quality for scaling operations
     SDL_SetHint("SDL_RENDER_SCALE_QUALITY", "2");  // 0=nearest, 1=linear, 2="best"
     
@@ -455,7 +602,7 @@ bool comic_viewer_init(int monitor_index) {
     viewer.window_height = 768;
     viewer.monitor_index = monitor_index;
     
-    SDL_WindowFlags window_flags = SDL_WINDOW_RESIZABLE;
+    SDL_WindowFlags window_flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
     viewer.window = SDL_CreateWindow("IC - Image Comic Viewer", 
                                     viewer.window_width, 
                                     viewer.window_height,
@@ -504,11 +651,9 @@ bool comic_viewer_init(int monitor_index) {
     viewer.scale_mode = SDL_SCALEMODE_LINEAR;
     
     // Set logical size to handle HiDPI scaling automatically
+    SDL_SetRenderLogicalPresentation(viewer.renderer, viewer.window_width, viewer.window_height,
+                                     SDL_LOGICAL_PRESENTATION_LETTERBOX);
     if (viewer.drawable_width > viewer.window_width || viewer.drawable_height > viewer.window_height) {
-        SDL_SetRenderLogicalPresentation(viewer.renderer, 
-                                         viewer.window_width, 
-                                         viewer.window_height,
-                                         SDL_LOGICAL_PRESENTATION_LETTERBOX);
         printf("HiDPI detected: Window size: %dx%d, Drawable size: %dx%d\n", 
                viewer.window_width, viewer.window_height, 
                viewer.drawable_width, viewer.drawable_height);
@@ -734,7 +879,14 @@ static bool split_image_path(const char *path, char *folder, char *image, size_t
     return true;
 }
 
+static bool initial_view_pending;
+static int pending_preload_direction;
+
 bool comic_viewer_load(const char *path) {
+    comic_viewer_finish_loading();
+    initial_view_pending = false;
+    pending_preload_direction = 0;
+    comic_viewer_save_reading_position();
     if (path == NULL) return false;
 
     // A lone image file: open the folder containing it and jump straight to it,
@@ -755,7 +907,7 @@ bool comic_viewer_load(const char *path) {
     if (viewer.source_path == NULL) return false;
 
     // Initial progress update
-    update_progress(0.0f, "Detecting input type...");
+    progress_bar_update(0.0f, "Detecting input type...");
 
     // Check if path is a directory
     struct stat path_stat;
@@ -790,12 +942,15 @@ bool comic_viewer_load(const char *path) {
     }
 
     if (result) {
+        progress_bar_update(0.8f, "Building page views...");
         // Clear any previous status message
         viewer.status_message[0] = '\0';
         imgui_layer_set_status_message(NULL);
         // generate default views
         generate_default_views();
+        progress_bar_update(0.9f, "Restoring reading position...");
         viewer_state_restore_for_source();
+        progress_bar_update(0.95f, "Preparing viewer...");
         // Update window title to reflect loaded source filename (not full path)
         if (viewer.window && viewer.source_path) {
             const char *src = viewer.source_path;
@@ -817,8 +972,11 @@ bool comic_viewer_load(const char *path) {
             snprintf(title, sizeof(title), "IC - %s", filename);
             SDL_SetWindowTitle(viewer.window, title);
         }
+        initial_view_pending = true;
+        progress_bar_update(0.96f, "Loading and processing first page...");
+        progress_bar_render();
     } else {
-        update_progress(1.0f, "Could not load input");
+        progress_bar_update(1.0f, "Could not load input");
         // If we couldn't load the archive, check if it's a directory
         if (viewer.type == SOURCE_DIRECTORY) {
             snprintf(viewer.status_message, sizeof(viewer.status_message),
@@ -833,11 +991,14 @@ bool comic_viewer_load(const char *path) {
 
 void unload_view(ImageView *view) {
     if (!view) return;
+    comic_viewer_finish_loading();
 
     // Unload images for the specified view
     for (int i = 0; i < view->count; i++) {
         int img_index = view->image_indices[i];
-        unload_image(&viewer.images[img_index]);
+        if (img_index >= 0 && img_index < viewer.image_count && img_index < MAX_IMAGES) {
+            unload_image(&viewer.images[img_index]);
+        }
     }
     if (view->surface) {
         SDL_DestroySurface(view->surface);
@@ -850,6 +1011,14 @@ void unload_view(ImageView *view) {
     }
 }
 
+static void preload_adjacent_view(void) {
+    ImageView *current = viewer.current_view_node;
+    if (!pending_preload_direction || !current || !current->texture || viewer.load_thread) return;
+    ImageView *adjacent = pending_preload_direction < 0 ? current->prev : current->next;
+    pending_preload_direction = 0;
+    if (adjacent && !adjacent->texture) load_view(adjacent);
+}
+
 void comic_viewer_run(void) {
     // get default image processing options
     options = get_default_processing_options();
@@ -858,8 +1027,8 @@ void comic_viewer_run(void) {
         // Load images for the current view
         load_view(viewer.current_view_node);
         // wait for first view to be loaded
-        SDL_WaitThread(viewer.load_thread, NULL);
-        viewer.load_thread = NULL;
+        comic_viewer_finish_loading();
+        viewer_render_current_view();
         // Async preload images for the next view if available
         if (viewer.current_view_node->next) {
             load_view(viewer.current_view_node->next);
@@ -884,14 +1053,18 @@ void comic_viewer_run(void) {
 
         // Render the current image
         viewer_render_current_view();
+        preload_adjacent_view();
     }
 
     // Cleanup resources
+    comic_viewer_finish_loading();
     free(options);
+    options = NULL;
 }
 
 void comic_viewer_cleanup(void) {
-    viewer_state_save_current();
+    comic_viewer_finish_loading();
+    comic_viewer_save_reading_position();
 
     // Clean up progress bar resources
     progress_bar_cleanup();
@@ -921,7 +1094,7 @@ void comic_viewer_cleanup(void) {
 
 // Internal helper functions
 static bool prepare_image(int index) {
-    if (index < 0 || index >= viewer.image_count) return false;
+    if (index < 0 || index >= viewer.image_count || index >= MAX_IMAGES) return false;
     
     // If the surface is already loaded, do nothing
     if (viewer.images[index].surface != NULL) return true;
@@ -930,6 +1103,7 @@ static bool prepare_image(int index) {
         char *image_path = NULL;
         if (archive_get_image(viewer.archive, index, &image_path)) {
             // Store the path in our image entry
+            free(viewer.images[index].path);
             viewer.images[index].path = image_path;
             return true;
         }
@@ -1135,6 +1309,21 @@ static void handle_events(void) {
                     break;
                 }
                 switch (event.key.key) {
+                    case SDLK_1:
+                    case SDLK_2:
+                    case SDLK_P:
+                    case SDLK_E:
+                    case SDLK_R:
+                    case SDLK_X:
+                    case SDLK_C:
+                    case SDLK_B:
+                    case SDLK_G:
+                        comic_viewer_finish_loading();
+                        break;
+                    default:
+                        break;
+                }
+                switch (event.key.key) {
                     case SDLK_S:
                         // Toggle scaling mode (Linear <-> Nearest)
                          if (viewer.scale_mode == SDL_SCALEMODE_LINEAR) {
@@ -1144,67 +1333,20 @@ static void handle_events(void) {
                         }
                         break;
                     case SDLK_DELETE:
-                        // Remove current view
-                        remove_current_view();
+                        if (event.key.repeat) break;
+                        if (viewer.type == SOURCE_DIRECTORY) {
+                            // In a folder, Delete erases the file(s) from disk
+                            delete_current_view_from_disk();
+                        } else {
+                            // Remove current view
+                            remove_current_view();
+                        }
                         break;
                     case SDLK_RETURN:
                     case SDLK_KP_ENTER:
                         // Apply crop if cropping mode, else toggle file browser
                         if (viewer.cropping_mode) {
-                            // Map selection rectangle in window coords to texture coords of current view
-                            ImageView *cv = viewer.current_view_node;
-                            if (cv && cv->texture) {
-                                float display_area_width = (float)viewer.drawable_width;
-                                float display_area_height = (float)viewer.drawable_height;
-                                float scale_h = display_area_height / cv->texture->h;
-                                float scale_w = display_area_width / cv->texture->w;
-                                float scale = fminf(scale_h, scale_w);
-                                float unzoomed_width = cv->texture->w * scale;
-                                float unzoomed_height = cv->texture->h * scale;
-                                float unzoomed_x = (display_area_width - unzoomed_width) / 2.0f;
-                                float unzoomed_y = (display_area_height - unzoomed_height) / 2.0f;
-
-                                float final_scale = scale;
-                                float x_pos_render = unzoomed_x;
-                                float y_pos_render = unzoomed_y;
-                                if (viewer.zoomed) {
-                                    final_scale = scale * viewer.zoom_level;
-                                    float cursor_relative_x = viewer.zoom_center_x - unzoomed_x;
-                                    float cursor_relative_y = viewer.zoom_center_y - unzoomed_y;
-                                    float zoomed_point_x = cursor_relative_x * viewer.zoom_level;
-                                    float zoomed_point_y = cursor_relative_y * viewer.zoom_level;
-                                    x_pos_render = viewer.zoom_center_x - zoomed_point_x + viewer.pan_offset_x;
-                                    y_pos_render = viewer.zoom_center_y - zoomed_point_y + viewer.pan_offset_y;
-                                }
-
-                                // Build selection rect
-                                float x1 = viewer.crop_start_x, y1 = viewer.crop_start_y;
-                                float x2 = viewer.crop_current_x, y2 = viewer.crop_current_y;
-                                float rx = fminf(x1, x2);
-                                float ry = fminf(y1, y2);
-                                float rw = fabsf(x2 - x1);
-                                float rh = fabsf(y2 - y1);
-
-                                // Compute intersection with image render rect
-                                SDL_FRect img_rect = { x_pos_render, y_pos_render, cv->texture->w * final_scale, cv->texture->h * final_scale };
-                                float ix = fmaxf(rx, img_rect.x);
-                                float iy = fmaxf(ry, img_rect.y);
-                                float iw = fminf(rx + rw, img_rect.x + img_rect.w) - ix;
-                                float ih = fminf(ry + rh, img_rect.y + img_rect.h) - iy;
-                                if (iw > 1 && ih > 1) {
-                                    // Map to texture space and update crop_rect
-                                    float tx = (ix - img_rect.x) / final_scale + cv->crop_rect.x;
-                                    float ty = (iy - img_rect.y) / final_scale + cv->crop_rect.y;
-                                    float tw = iw / final_scale;
-                                    float th = ih / final_scale;
-                                    // Clamp within original crop bounds
-                                    if (tx < cv->crop_rect.x) { tw -= (cv->crop_rect.x - tx); tx = cv->crop_rect.x; }
-                                    if (ty < cv->crop_rect.y) { th -= (cv->crop_rect.y - ty); ty = cv->crop_rect.y; }
-                                    if (tx + tw > cv->crop_rect.x + cv->crop_rect.w) tw = cv->crop_rect.x + cv->crop_rect.w - tx;
-                                    if (ty + th > cv->crop_rect.y + cv->crop_rect.h) th = cv->crop_rect.y + cv->crop_rect.h - ty;
-                                    cv->crop_rect = (SDL_FRect){ tx, ty, tw, th };
-                                }
-                            }
+                            viewer_apply_crop_selection();
                             // Exit cropping mode after apply
                             viewer.cropping_mode = false;
                             viewer.cropping_active = false;
@@ -1248,7 +1390,7 @@ static void handle_events(void) {
                         break;
 
                     case SDLK_1:
-                        if (viewer.current_view_node->count == 1) {
+                        if (!viewer.current_view_node || viewer.current_view_node->count <= 1) {
                             // This view is already in single image mode
                             break;
                         }
@@ -1256,10 +1398,6 @@ static void handle_events(void) {
                         // Save the second image index before modifying the view
                         int second_image_index = viewer.current_view_node->image_indices[1];
                         
-                        // the current view now has 1 image
-                        viewer.current_view_node->count = 1;
-                        viewer.current_view_node->image_indices[1] = -1; // Clear unused index
-
                         // save link to the next view node
                         ImageView *backup_next_view = viewer.current_view_node->next;
                         // insert a new view node after the current one
@@ -1268,6 +1406,8 @@ static void handle_events(void) {
                             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create new view node");
                             break;
                         }
+                        viewer.current_view_node->count = 1;
+                        viewer.current_view_node->image_indices[1] = -1;
                         new_view->count = 1;
                         new_view->image_indices[0] = second_image_index;
                         new_view->next = backup_next_view;
@@ -1286,32 +1426,31 @@ static void handle_events(void) {
 
                     case SDLK_2: 
                         {
-                            if (viewer.current_view_node->count == 2 || !viewer.current_view_node->next) {
+                            if (!viewer.current_view_node || viewer.current_view_node->count != 1 ||
+                                !viewer.current_view_node->next || viewer.current_view_node->next->count <= 0) {
                                 // This view is already in double image mode or there is no next image to pair with
                                 break;
                             }
 
-                            // the current view now has 2 images
-                            viewer.current_view_node->count = 2;
-                            // the second image of the current view is the first image of the next view
                             ImageView *old_next_view = viewer.current_view_node->next;
-                            viewer.current_view_node->image_indices[1] = old_next_view->image_indices[0];
-                            // ensure the image is loaded
-                            if (viewer.images[viewer.current_view_node->image_indices[1]].surface == NULL) {
-                                prepare_image(viewer.current_view_node->image_indices[1]);
-                            }
-                            // remove the next view from the linked list
-                            viewer.current_view_node->next = old_next_view->next;
-                            if (old_next_view->next) {
-                                old_next_view->next->prev = viewer.current_view_node;
-                            }
-                            viewer.view_count--;
-                            
                             unload_view(viewer.current_view_node);
+                            unload_view(old_next_view);
+                            viewer.current_view_node->count = 2;
+                            viewer.current_view_node->image_indices[1] = old_next_view->image_indices[0];
+                            for (int index = 1; index < old_next_view->count; index++) {
+                                old_next_view->image_indices[index - 1] = old_next_view->image_indices[index];
+                            }
+                            old_next_view->count--;
+                            old_next_view->image_indices[old_next_view->count] = -1;
+                            if (old_next_view->count == 0) {
+                                viewer.current_view_node->next = old_next_view->next;
+                                if (old_next_view->next) {
+                                    old_next_view->next->prev = viewer.current_view_node;
+                                }
+                                viewer.view_count--;
+                                free(old_next_view);
+                            }
                             view_changed(NULL, viewer.current_view_node);
-                            
-                            // Free the old next view
-                            free(old_next_view);
                         }
                         break;
                         
@@ -1341,6 +1480,7 @@ static void handle_events(void) {
                     case SDLK_END:
                         // Last image
                         {
+                            if (!viewer.first_view) break;
                             if (viewer.load_thread && SDL_GetThreadState(viewer.load_thread) == SDL_THREAD_ALIVE) {
                                 return;
                             }                            
@@ -1549,12 +1689,17 @@ static void handle_events(void) {
                 // Update logical presentation for HiDPI
                 SDL_GetWindowSizeInPixels(viewer.window, &viewer.drawable_width, &viewer.drawable_height);
                 
-                if (viewer.drawable_width != viewer.window_width || viewer.drawable_height != viewer.window_height) {
+                if (viewer.window_width > 0 && viewer.window_height > 0) {
                     SDL_SetRenderLogicalPresentation(viewer.renderer, 
                                                     viewer.window_width, 
                                                     viewer.window_height,
                                                     SDL_LOGICAL_PRESENTATION_LETTERBOX);
                 }
+                break;
+
+            case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+                viewer.drawable_width = event.window.data1;
+                viewer.drawable_height = event.window.data2;
                 break;
                 
             case SDL_EVENT_WINDOW_EXPOSED:
@@ -1693,10 +1838,8 @@ static int load_view_surfaces_in_thread(void *data) {
         }
 
         int image_index = view->image_indices[i];
+        if (!prepare_image(image_index)) return -1;
         ImageEntry *image = &viewer.images[image_index];
-
-        // Load the image file if not already loaded
-        prepare_image(image_index);
 
         if (!image->surface) {
             image->surface = image_load_surface(image->path, options);
@@ -1752,6 +1895,12 @@ static int load_view_surfaces_in_thread(void *data) {
 
             current_x += image->surface->w;
         }
+    }
+
+    if (view->count == 1) {
+        surface = SDL_DuplicateSurface(surface);
+        if (!surface) return -1;
+        combined_surface = surface;
     }
 
     if (generation != SDL_GetAtomicInt(&viewer.load_generation)) {
@@ -1995,15 +2144,13 @@ static int load_view_surfaces_in_thread(void *data) {
         }
     }
 
+    if (generation != SDL_GetAtomicInt(&viewer.load_generation)) {
+        return cleanup_load_thread_resources(combined_surface);
+    }
     view->surface = surface; // transfer ownership to main thread
 
     // Post to main thread to convert surface -> texture
     if (surface) {
-        if (generation != SDL_GetAtomicInt(&viewer.load_generation)) {
-            cleanup_load_thread_resources(combined_surface);
-            if (view->count > 1 && surface) SDL_DestroySurface(surface);
-            return 0;
-        }       
         PreloadResult *res = malloc(sizeof(PreloadResult));
         if (res) {
             res->view = view;
@@ -2014,10 +2161,7 @@ static int load_view_surfaces_in_thread(void *data) {
             event.type = viewer.preload_event_type;
             event.user.data1 = res;
             event.user.data2 = NULL;
-            SDL_PushEvent(&event);
-        } else {
-            // If allocation failed, free combined surface if we created one
-            if (view->count > 1 && surface) SDL_DestroySurface(surface);
+            if (!SDL_PushEvent(&event)) free(res);
         }
     }
 
@@ -2026,14 +2170,14 @@ static int load_view_surfaces_in_thread(void *data) {
 
 // Start worker thread to decode surfaces for the given view
 static void load_view(ImageView *view) {
+    if (!view) return;
+    comic_viewer_finish_loading();
     if (view->texture) return; // already done
-    SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION, "load_view called for view %p", (void*)view);
-    if (viewer.load_thread && SDL_GetThreadState(viewer.load_thread) == SDL_THREAD_ALIVE) {
-        // We are already loading
-        SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION, "Joining previous load thread");
-        SDL_WaitThread(viewer.load_thread, NULL);
-        viewer.load_thread = NULL;
+    if (view->surface) {
+        create_texture(viewer.renderer, view);
+        return;
     }
+    SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION, "load_view called for view %p", (void*)view);
     int generation = SDL_GetAtomicInt(&viewer.load_generation);
     SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION, "Starting load task with generation=%d", generation);
     LoadViewTask *task = malloc(sizeof(LoadViewTask));
@@ -2097,21 +2241,24 @@ bool viewer_has_current_view(void) { return viewer.current_view_node != NULL; }
 
 // Function to select monitor and get its position
 static bool select_monitor(int monitor_index, int *x, int *y) {
-    int num_displays;
-    SDL_DisplayID* display_id = SDL_GetDisplays(&num_displays);
-    if (num_displays <= 0) {
+    int num_displays = 0;
+    SDL_DisplayID *displays = SDL_GetDisplays(&num_displays);
+    if (!displays || num_displays <= 0) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "No video displays available: %s", SDL_GetError());
+        SDL_free(displays);
         return false;
     }
-    SDL_free(display_id);
 
-    if (monitor_index < 0 || monitor_index >= num_displays) {
+    if (monitor_index < -1 || monitor_index >= num_displays || !x || !y) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Invalid monitor index: %d", monitor_index);
+        SDL_free(displays);
         return false;
     }
+    SDL_DisplayID display = monitor_index == -1 ? SDL_GetPrimaryDisplay() : displays[monitor_index];
+    SDL_free(displays);
 
     SDL_Rect bounds;
-    if (SDL_GetDisplayBounds(monitor_index, &bounds) != 0) {
+    if (!SDL_GetDisplayBounds(display, &bounds)) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to get display bounds for monitor %d: %s", monitor_index, SDL_GetError());
         return false;
     }
@@ -2125,15 +2272,20 @@ static void create_texture(SDL_Renderer *renderer, ImageView *view) {
     view->texture = SDL_CreateTextureFromSurface(renderer, view->surface);
     if (!view->texture) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create texture: %s", SDL_GetError());
+    } else if (initial_view_pending && view == viewer.current_view_node) {
+        initial_view_pending = false;
+        progress_bar_update(1.0f, "Page ready");
     }
 }
 
 // Helper function for progress callback
 static void update_progress(float progress, const char *message) {
-    progress_bar_update(progress, message);
+    progress_bar_update(0.05f + 0.7f * progress, message);
 }
 
 static void view_changed(ImageView *old_view_node, ImageView *new_view_node) {    
+    if (!new_view_node) return;
+    comic_viewer_finish_loading();
 
     // if zoom is active, set zoom y to 0 on the next page
     if (viewer.zoomed) {
@@ -2145,41 +2297,17 @@ static void view_changed(ImageView *old_view_node, ImageView *new_view_node) {
     viewer.last_page_change_time = SDL_GetTicks();
     viewer.show_progress_indicator = true;
     
-    // If we're switching away from the page being loaded, cancel the load thread
-    // Invalidate the generation first so the worker knows to discard its work
-    if (viewer.load_thread && SDL_GetThreadState(viewer.load_thread) == SDL_THREAD_ALIVE) {
-        // Wait for the thread to finish processing even with stale generation
-        // This prevents use-after-free when worker accesses images being unloaded
-        SDL_WaitThread(viewer.load_thread, NULL);
-        viewer.load_thread = NULL;
+    if (old_view_node && old_view_node != new_view_node && old_view_node != new_view_node->next) {
+        unload_view(old_view_node);
     }
     
+    viewer.current_view_node = new_view_node;
+    pending_preload_direction = old_view_node && old_view_node == new_view_node->next ? -1 : 1;
+
     // Start loading the new view if not already loaded
     if (!new_view_node->texture) {
         load_view(new_view_node);
     }
-
-    // Preload the next view in the direction we're moving
-    if (!old_view_node || old_view_node != new_view_node->next) {
-        // if we didn't go back to the previous view, preload the next one
-        if (new_view_node->next) {
-            // Only preload if not already loading and not already loaded
-            if (!new_view_node->next->texture) {
-                load_view(new_view_node->next);
-            }
-        }
-        // Unload old view images to free memory
-        if (old_view_node) {
-            unload_view(old_view_node);
-        }
-    } else {
-        // We're going backwards - make sure to preload the previous view
-        if (new_view_node->prev && !new_view_node->prev->texture) {
-            load_view(new_view_node->prev);
-        }
-    }
-
-    viewer.current_view_node = new_view_node;
 }
 
 void go_to_previous_view() {

@@ -93,6 +93,7 @@ ArchiveHandle* cbr_open(const char *path, int *total_images, ProgressCallback pr
     }
 
     // Read list of files from unrar output
+    size_t output_length = strlen(output);
     char *line = strtok(output, "\n");
     int capacity = 100;  // Initial capacity
     char **image_entries = (char**)malloc(capacity * sizeof(char*));
@@ -106,7 +107,7 @@ ArchiveHandle* cbr_open(const char *path, int *total_images, ProgressCallback pr
     }
 
     if (progress_cb) {
-        progress_cb(0.9f, "Creating list of images...");
+        progress_cb(0.82f, "Creating list of images...");
     }    
     
     while (line != NULL) {
@@ -134,6 +135,12 @@ ArchiveHandle* cbr_open(const char *path, int *total_images, ProgressCallback pr
             
             // Store entry name
             image_entries[count++] = strdup(line);
+        }
+        if (progress_cb) {
+            size_t parsed_bytes = (size_t)(line - output) + strlen(line);
+            char msg[128];
+            snprintf(msg, sizeof(msg), "Indexing RAR entries (%d images found)...", count);
+            progress_cb(0.82f + 0.12f * (float)parsed_bytes / output_length, msg);
         }
         line = strtok(NULL, "\n");
     }

@@ -1,42 +1,48 @@
-name: linux
+name: Linux
 
 on:
   push:
-    branches:
-      - '*'
   pull_request:
-    branches:
-      - '*'
+
+permissions:
+  contents: read
 
 jobs:
-  c:
-    runs-on: ubuntu-latest
-
+  build:
+    runs-on: ubuntu-24.04
+    container: ubuntu:26.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
     strategy:
+      fail-fast: false
       matrix:
-        curl: [0, 1]
-        exif: [0, 1]
-        xinerama: [0, 1]
-
+        image_backend: [auto, sdl_image]
+        sanitizer: [none]
+        include:
+          - image_backend: auto
+            sanitizer: address,undefined
     steps:
-      - uses: actions/checkout@v4
-      - name: APT
-        run: sudo apt-get -y update
       - name: Install Dependencies
         run: |
-          sudo apt-get -y install build-essential make libzip-dev
-          # Install FreeImage library
-          sudo apt-get -y install libfreeimage-dev
-          # Install SDL3 and TTF dependencies
-          sudo apt-get -y install libsdl3-dev libsdl3-ttf-dev
-      - name: Install libcurl
-        if: matrix.curl
-        run: sudo apt-get -y install libcurl4-openssl-dev
-      - name: Install libexif
-        if: matrix.exif
-        run: sudo apt-get -y install libexif-dev
-      - name: Install Xinerama
-        if: matrix.xinerama
-        run: sudo apt-get -y install libxinerama-dev
-      - name: Build and Test
-        run: for inotify in 0 1; do for verscmp in 0 1; do make curl=${{ matrix.curl }} exif=${{ matrix.exif }} inotify=$inotify verscmp=$verscmp xinerama=${{ matrix.xinerama }} && make test && make clean; done; done
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates git build-essential cmake meson ninja-build pkg-config \
+            libsdl3-dev libsdl3-ttf-dev libsdl3-image-dev libzip-dev \
+            libfreeimage-dev glslc poppler-utils fonts-dejavu-core
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: >-
+          meson setup builddir --buildtype=debug
+          -Dimage_backend=${{ matrix.image_backend }}
+          -Db_sanitize=${{ matrix.sanitizer }}
+      - name: Build
+        run: meson compile -C builddir
+      - name: Test
+        run: meson test -C builddir --print-errorlogs
+      - name: Upload Test Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs-${{ matrix.image_backend }}-${{ matrix.sanitizer }}
+          path: builddir/meson-logs/
+          if-no-files-found: ignore

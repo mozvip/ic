@@ -103,9 +103,9 @@ void adjust_gamma_brightness_contrast(SDL_Surface* surface, double gamma, double
 
             // Apply gamma
             if (gamma != 1.0 && gamma > 0) {
-                new_r = pow(new_r / 255.0, 1.0 / gamma) * 255.0;
-                new_g = pow(new_g / 255.0, 1.0 / gamma) * 255.0;
-                new_b = pow(new_b / 255.0, 1.0 / gamma) * 255.0;
+                new_r = pow(fmax(0, fmin(255, new_r)) / 255.0, 1.0 / gamma) * 255.0;
+                new_g = pow(fmax(0, fmin(255, new_g)) / 255.0, 1.0 / gamma) * 255.0;
+                new_b = pow(fmax(0, fmin(255, new_b)) / 255.0, 1.0 / gamma) * 255.0;
             }
 
             // Clamp values

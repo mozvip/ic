@@ -83,6 +83,7 @@ ArchiveHandle* pdf_open(const char *path, int *total_images, ProgressCallback pr
     }
 
     /* Select backend from viewer state. */
+    if (progress_cb) progress_cb(0.1f, "Selecting PDF renderer...");
     int sel = (int)viewer.pdf_backend;
     const PdfBackendOps *ops = pdf_backend_get_ops(sel);
     if (!ops || !ops->is_available || !ops->is_available()) {
@@ -115,6 +116,7 @@ ArchiveHandle* pdf_open(const char *path, int *total_images, ProgressCallback pr
     }
 
     /* Wrap backend state. */
+    if (progress_cb) progress_cb(0.6f, "Preparing PDF metadata...");
     PdfState *state = calloc(1, sizeof(*state));
     state->ops = ops;
     state->ctx = bctx;
@@ -128,7 +130,14 @@ ArchiveHandle* pdf_open(const char *path, int *total_images, ProgressCallback pr
 
     /* 1-to-1 page index mapping. */
     handle->page_indices = malloc(n_pages * sizeof(int));
-    for (int i = 0; i < n_pages; i++) handle->page_indices[i] = i;
+    for (int i = 0; i < n_pages; i++) {
+        handle->page_indices[i] = i;
+        if (progress_cb) {
+            char msg[128];
+            snprintf(msg, sizeof(msg), "Indexing PDF page (%d/%d)...", i + 1, n_pages);
+            progress_cb(0.65f + 0.3f * (float)(i + 1) / n_pages, msg);
+        }
+    }
 
     *total_images = n_pages;
 

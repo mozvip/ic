@@ -22,6 +22,7 @@ ArchiveHandle* archive_open(const char *path, ArchiveType type, int *total_image
     if (!path || !total_images) {
         return NULL;
     }
+    *total_images = 0;
     
     ArchiveHandle *handle = NULL;
     
@@ -60,6 +61,14 @@ ArchiveHandle* archive_open(const char *path, ArchiveType type, int *total_image
             return NULL;
     }
     
+    if (handle && (handle->total_images <= 0 || handle->total_images > MAX_IMAGES)) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "Archive contains %d images; supported maximum is %d",
+                     handle->total_images, MAX_IMAGES);
+        archive_close(handle);
+        handle = NULL;
+    }
+    if (!handle) *total_images = 0;
     return handle;
 }
 

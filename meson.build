@@ -70,6 +70,13 @@ dependencies = [
 if freeimage_dep.found() and image_backend_opt != 'sdl_image'
   add_project_arguments('-DHAVE_FREEIMAGE', language: ['c', 'cpp'])
   dependencies += [freeimage_dep]
+  # Some distros (e.g. Arch jxrlib) ship libjxrglue.so without a NEEDED entry
+  # for libjpegxr, so FreeImage's transitive link fails unless we add it.
+  # --no-as-needed keeps it in DT_NEEDED so the runtime loader resolves it too.
+  if cc.find_library('jpegxr', required: false).found()
+    dependencies += [declare_dependency(
+      link_args: '-Wl,--push-state,--no-as-needed,-ljpegxr,--pop-state')]
+  endif
 endif
 
 if sdl3_image_dep.found()
@@ -153,13 +160,33 @@ if glslc_prog.found()
 endif
 
 # Executable
-executable('ic',
+ic_exe = executable('ic',
   sources,
   spv_embed_h,
   include_directories: inc_dirs,
   dependencies: dependencies,
   install: true,
 )
+
+test_objects = []
+excluded_test_sources = files('src/main.c', 'src/comic_viewer.c', 'src/clipboard.c')
+foreach source : sources
+  if source not in excluded_test_sources
+    test_objects += ic_exe.extract_objects(source)
+  endif
+endforeach
+safety_tests = executable('safety-tests',
+  'tests/safety.c',
+  objects: test_objects,
+  include_directories: inc_dirs,
+  dependencies: dependencies,
+)
+test('safety', safety_tests,
+  env: ['SDL_VIDEODRIVER=dummy', 'IC_IMAGE_BACKEND=auto'], timeout: 60)
+if freeimage_dep.found() and image_backend_opt != 'sdl_image' and sdl3_image_dep.found()
+  test('safety-sdl-image', safety_tests,
+    env: ['SDL_VIDEODRIVER=dummy', 'IC_IMAGE_BACKEND=sdl_image'], timeout: 60)
+endif
 
 # Install desktop file
 install_data('ic.desktop',

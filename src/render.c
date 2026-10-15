@@ -13,15 +13,67 @@
 
 extern struct ViewerState viewer;
 extern ImageProcessingOptions* options;
+
+bool viewer_get_view_rects(const ImageView *view, SDL_FRect *source, SDL_FRect *destination) {
+    if (!view || !view->texture || !source || !destination ||
+        viewer.window_width <= 0 || viewer.window_height <= 0) return false;
+    *source = view->crop_rect;
+    if (source->w <= 0 || source->h <= 0) {
+        *source = (SDL_FRect){0, 0, view->texture->w, view->texture->h};
+    }
+    if (source->w <= 0 || source->h <= 0) return false;
+    float scale = fminf(viewer.window_width / source->w, viewer.window_height / source->h);
+    float base_width = source->w * scale;
+    float base_height = source->h * scale;
+    float base_x = (viewer.window_width - base_width) / 2.0f;
+    float base_y = (viewer.window_height - base_height) / 2.0f;
+    *destination = (SDL_FRect){base_x, base_y, base_width, base_height};
+    if (viewer.zoomed) {
+        float zoom = fmaxf(viewer.zoom_level, 1e-6f);
+        destination->w *= zoom;
+        destination->h *= zoom;
+        destination->x = viewer.zoom_center_x - (viewer.zoom_center_x - base_x) * zoom;
+        destination->y = viewer.zoom_center_y - (viewer.zoom_center_y - base_y) * zoom;
+        if (destination->h > viewer.window_height) {
+            viewer.pan_offset_y = fmaxf(viewer.window_height - destination->h - destination->y,
+                                       fminf(-destination->y, viewer.pan_offset_y));
+        } else {
+            viewer.pan_offset_y = 0;
+        }
+        destination->x += viewer.pan_offset_x;
+        destination->y += viewer.pan_offset_y;
+    }
+    return true;
+}
+
+bool viewer_apply_crop_selection(void) {
+    SDL_FRect source, destination;
+    if (!viewer_get_view_rects(viewer.current_view_node, &source, &destination)) return false;
+    float left = fmaxf(0, fmaxf(destination.x, fminf(viewer.crop_start_x, viewer.crop_current_x)));
+    float top = fmaxf(0, fmaxf(destination.y, fminf(viewer.crop_start_y, viewer.crop_current_y)));
+    float right = fminf(viewer.window_width,
+                       fminf(destination.x + destination.w, fmaxf(viewer.crop_start_x, viewer.crop_current_x)));
+    float bottom = fminf(viewer.window_height,
+                        fminf(destination.y + destination.h, fmaxf(viewer.crop_start_y, viewer.crop_current_y)));
+    if (right - left <= 1 || bottom - top <= 1) return false;
+    viewer.current_view_node->crop_rect = (SDL_FRect){
+        source.x + (left - destination.x) * source.w / destination.w,
+        source.y + (top - destination.y) * source.h / destination.h,
+        (right - left) * source.w / destination.w,
+        (bottom - top) * source.h / destination.h
+    };
+    return true;
+}
+
 static void draw_cropping_rect(SDL_FRect rect) {
     // Semi-transparent darken outside area and stroke rectangle
     SDL_Color border = {255, 255, 255, 220};
     SDL_SetRenderDrawColor(viewer.renderer, 0, 0, 0, 120);
     // darken outside by drawing four rects around selection
-    SDL_FRect top = {0, 0, (float)viewer.drawable_width, rect.y};
+    SDL_FRect top = {0, 0, (float)viewer.window_width, rect.y};
     SDL_FRect left = {0, rect.y, rect.x, rect.h};
-    SDL_FRect right = {rect.x + rect.w, rect.y, (float)viewer.drawable_width - (rect.x + rect.w), rect.h};
-    SDL_FRect bottom = {0, rect.y + rect.h, (float)viewer.drawable_width, (float)viewer.drawable_height - (rect.y + rect.h)};
+    SDL_FRect right = {rect.x + rect.w, rect.y, (float)viewer.window_width - (rect.x + rect.w), rect.h};
+    SDL_FRect bottom = {0, rect.y + rect.h, (float)viewer.window_width, (float)viewer.window_height - (rect.y + rect.h)};
     SDL_RenderFillRect(viewer.renderer, &top);
     SDL_RenderFillRect(viewer.renderer, &left);
     SDL_RenderFillRect(viewer.renderer, &right);
@@ -46,15 +98,10 @@ void viewer_render_cropping_overlay(void) {
     float y1 = viewer.crop_start_y;
     float x2 = viewer.crop_current_x;
     float y2 = viewer.crop_current_y;
-    float rx = fminf(x1, x2);
-    float ry = fminf(y1, y2);
-    float rw = fabsf(x2 - x1);
-    float rh = fabsf(y2 - y1);
-    // Clamp to drawable
-    if (rx < 0) rx = 0;
-    if (ry < 0) ry = 0;
-    if (rx + rw > viewer.drawable_width) rw = viewer.drawable_width - rx;
-    if (ry + rh > viewer.drawable_height) rh = viewer.drawable_height - ry;
+    float rx = fminf(viewer.window_width, fmaxf(0, fminf(x1, x2)));
+    float ry = fminf(viewer.window_height, fmaxf(0, fminf(y1, y2)));
+    float rw = fmaxf(0, fminf(viewer.window_width, fmaxf(x1, x2)) - rx);
+    float rh = fmaxf(0, fminf(viewer.window_height, fmaxf(y1, y2)) - ry);
     SDL_FRect rect = { rx, ry, rw, rh };
     draw_cropping_rect(rect);
 
@@ -63,7 +110,7 @@ void viewer_render_cropping_overlay(void) {
     if (hint) {
         float w, h;
         SDL_GetTextureSize(hint, &w, &h);
-        SDL_FRect dst = { 10.0f, (float)viewer.drawable_height - h - 10.0f, w, h };
+        SDL_FRect dst = { 10.0f, (float)viewer.window_height - h - 10.0f, w, h };
         SDL_RenderTexture(viewer.renderer, hint, NULL, &dst);
         SDL_DestroyTexture(hint);
     }
@@ -172,7 +219,7 @@ void viewer_display_info(void) {
             if (msg) {
                 float w, h;
                 SDL_GetTextureSize(msg, &w, &h);
-                SDL_FRect dst = { (float)viewer.drawable_width - w - 10.0f, 10.0f, w, h };
+                SDL_FRect dst = { (float)viewer.window_width - w - 10.0f, 10.0f, w, h };
                 SDL_RenderTexture(viewer.renderer, msg, NULL, &dst);
                 SDL_DestroyTexture(msg);
             }
@@ -194,10 +241,10 @@ void viewer_render_current_view(void) {
     ImageView *current_display_view = viewer.current_view_node;
     if (!current_display_view || !current_display_view->texture) {
         // Page is loading or empty - show loading indicator
-        if (current_display_view && viewer.load_thread && SDL_GetThreadState(viewer.load_thread) == SDL_THREAD_ALIVE) {
+        if (current_display_view && viewer.load_thread) {
             // Page is actively loading - show spinner
-            int centerX = (int)((float)viewer.drawable_width / 2.0f);
-            int centerY = (int)((float)viewer.drawable_height / 2.0f);
+            int centerX = (int)((float)viewer.window_width / 2.0f);
+            int centerY = (int)((float)viewer.window_height / 2.0f);
             int radius = 30;
             
             // Animate the spinner based on time
@@ -206,7 +253,9 @@ void viewer_render_current_view(void) {
             draw_progress_indicator(viewer.renderer, progress, centerX, centerY, radius);
             
             // Show "Loading..." text below the spinner
-            SDL_Texture *loading_text = render_text_internal("Loading page...", (SDL_Color){200,200,200,255});
+            char loading_message[64];
+            snprintf(loading_message, sizeof(loading_message), "Loading page %d...", viewer.current_view_index + 1);
+            SDL_Texture *loading_text = render_text_internal(loading_message, (SDL_Color){200,200,200,255});
             if (loading_text) {
                 float w, h;
                 SDL_GetTextureSize(loading_text, &w, &h);
@@ -228,89 +277,21 @@ void viewer_render_current_view(void) {
         return;
     }
 
-    float display_area_width = (float)viewer.drawable_width;
-    float display_area_height = (float)viewer.drawable_height;
-
-    float overall_content_start_x = display_area_width;
-    float overall_content_end_x = 0.0f;
-
-    // Use crop_rect dimensions as the effective source size to preserve aspect ratio.
-    // When crop_rect is set (non-zero), it defines the actual visible region which may
-    // differ from the full texture dimensions (e.g. after auto-crop trims white borders).
-    SDL_FRect *src_rect = NULL;
-    float src_w, src_h;
-    if (current_display_view->crop_rect.w > 0 && current_display_view->crop_rect.h > 0) {
-        src_rect = &current_display_view->crop_rect;
-        src_w = current_display_view->crop_rect.w;
-        src_h = current_display_view->crop_rect.h;
-    } else {
-        src_w = (float)current_display_view->texture->w;
-        src_h = (float)current_display_view->texture->h;
-    }
-
-    float scale_height = display_area_height / src_h;
-    float scale_width = display_area_width / src_w;
-    float scale = fminf(scale_height, scale_width);
-
-    float final_scale = scale;
-    if (viewer.zoomed) final_scale = scale * viewer.zoom_level;
-
-    if (final_scale <= 1e-6f) final_scale = 1e-6f;
-
-    int scaled_width = (int)(src_w * final_scale);
-    int scaled_height = (int)(src_h * final_scale);
-    if (scaled_width <= 0) scaled_width = 1;
-    if (scaled_height <= 0) scaled_height = 1;
-
-    float start_x = (display_area_width - (src_w * scale)) / 2.0f;
-
-    float x_pos_render, y_pos_render;
-    if (viewer.zoomed) {
-        float unzoomed_width = src_w * scale;
-        float unzoomed_height = src_h * scale;
-        float unzoomed_x = (display_area_width - unzoomed_width) / 2.0f;
-        float unzoomed_y = (display_area_height - unzoomed_height) / 2.0f;
-
-        float cursor_relative_x = viewer.zoom_center_x - unzoomed_x;
-        float cursor_relative_y = viewer.zoom_center_y - unzoomed_y;
-
-        float zoomed_point_x = cursor_relative_x * viewer.zoom_level;
-        float zoomed_point_y = cursor_relative_y * viewer.zoom_level;
-
-        x_pos_render = viewer.zoom_center_x - zoomed_point_x;
-        y_pos_render = viewer.zoom_center_y - zoomed_point_y;
-
-        if (scaled_height > display_area_height) {
-            float max_pan_y = -y_pos_render;
-            float min_pan_y = display_area_height - scaled_height - y_pos_render;
-            if (viewer.pan_offset_y > max_pan_y) viewer.pan_offset_y = max_pan_y;
-            if (viewer.pan_offset_y < min_pan_y) viewer.pan_offset_y = min_pan_y;
-        } else {
-            viewer.pan_offset_y = 0;
-        }
-
-        x_pos_render += viewer.pan_offset_x;
-        y_pos_render += viewer.pan_offset_y;
-    } else {
-        x_pos_render = start_x;
-        y_pos_render = (display_area_height - scaled_height) / 2.0f;
-    }
-
-    if (x_pos_render < overall_content_start_x) overall_content_start_x = x_pos_render;
-    if (x_pos_render + scaled_width > overall_content_end_x) overall_content_end_x = x_pos_render + scaled_width;
+    float display_area_width = (float)viewer.window_width;
+    float display_area_height = (float)viewer.window_height;
+    SDL_FRect source, destination;
+    if (!viewer_get_view_rects(current_display_view, &source, &destination)) return;
 
     // Render overlay using the new module
     render_overlay(viewer.renderer, current_display_view, 
                   display_area_width, display_area_height, 
-                  overall_content_start_x, overall_content_end_x);
+                  destination.x, destination.x + destination.w);
 
     // Now render the main image on top
-    SDL_FRect dest_rect = { x_pos_render, y_pos_render, (float)scaled_width, (float)scaled_height };
-
     // Apply the user-selected scale mode
     SDL_SetTextureScaleMode(current_display_view->texture, viewer.scale_mode);
 
-    SDL_RenderTexture(viewer.renderer, current_display_view->texture, src_rect, &dest_rect);
+    SDL_RenderTexture(viewer.renderer, current_display_view->texture, &source, &destination);
 
     // Draw cropping overlay before info/file browser so guides are visible under UI
     viewer_render_cropping_overlay();

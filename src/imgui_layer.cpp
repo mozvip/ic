@@ -309,6 +309,7 @@ static void imgui_layer_build_ui(void) {
             if (view_shader_index >= shader_count) view_shader_index = shader_count - 1;
             if (ImGui::Combo("View Shader", &view_shader_index,
                              shader_items, shader_count)) {
+                comic_viewer_finish_loading();
                 viewer.view_pixel_shader = (PixelShaderType)view_shader_index;
                 comic_viewer_reload_current_view();
                 viewer.last_page_change_time = SDL_GetTicks();
@@ -337,6 +338,7 @@ static void imgui_layer_build_ui(void) {
                 };
                 
                 if (ImGui::Combo("Color Filter", &filter_index, filter_items, IM_ARRAYSIZE(filter_items))) {
+                    comic_viewer_finish_loading();
                     options->color_filter = (ColorFilterType)filter_index;
                     comic_viewer_reload_current_view();
                     viewer.last_page_change_time = SDL_GetTicks();
@@ -349,6 +351,7 @@ static void imgui_layer_build_ui(void) {
         {
             bool border_removal_enabled = viewer.border_removal_enabled;
             if (ImGui::Checkbox("Enable Auto Border Removal", &border_removal_enabled)) {
+                comic_viewer_finish_loading();
                 viewer.border_removal_enabled = border_removal_enabled;
                 comic_viewer_reload_current_view();
                 viewer.last_page_change_time = SDL_GetTicks();
@@ -363,23 +366,23 @@ static void imgui_layer_build_ui(void) {
             bool border_threshold_changed = ImGui::SliderInt("White Threshold", &border_white_threshold, 0, 255);
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("RGB average above this value is considered background (default: 240)");
-            if (border_threshold_changed)
-                viewer.border_white_threshold = border_white_threshold;
 
             int border_required_non_white = viewer.border_required_non_white;
             bool border_samples_changed = ImGui::SliderInt("Content Samples", &border_required_non_white, 1, 32);
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Number of non-background pixels needed to stop scanning (default: 3)");
-            if (border_samples_changed)
-                viewer.border_required_non_white = border_required_non_white;
 
             if (border_threshold_changed || border_samples_changed) {
+                comic_viewer_finish_loading();
+                viewer.border_white_threshold = border_white_threshold;
+                viewer.border_required_non_white = border_required_non_white;
                 comic_viewer_reload_current_view();
                 viewer.last_page_change_time = SDL_GetTicks();
                 imgui_layer_set_status_message("Border removal thresholds updated");
             }
 
             if (ImGui::Button("Reset to Defaults")) {
+                comic_viewer_finish_loading();
                 viewer.border_white_threshold = 240;
                 viewer.border_required_non_white = 3;
                 comic_viewer_reload_current_view();
@@ -421,6 +424,7 @@ static void imgui_layer_build_ui(void) {
 
             if (ImGui::Combo("Image Decoder", &selected, items, IMAGE_BACKEND_COUNT)) {
                 if (selected == (int)IMAGE_BACKEND_AUTO || selectable[selected]) {
+                    comic_viewer_finish_loading();
                     if (image_loader_set_preferred_backend((ImageBackend)selected)) {
                         comic_viewer_reload_current_view();
                         viewer.last_page_change_time = SDL_GetTicks();
@@ -505,7 +509,16 @@ void imgui_layer_render(void) {
     imgui_layer_build_ui();
 
     ImGui::Render();
-    ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), g_renderer);
+    ImDrawData *draw_data = ImGui::GetDrawData();
+    ImVec2 framebuffer_scale = draw_data->FramebufferScale;
+    SDL_RendererLogicalPresentation presentation;
+    int logical_width, logical_height;
+    if (SDL_GetRenderLogicalPresentation(g_renderer, &logical_width, &logical_height, &presentation) &&
+        presentation != SDL_LOGICAL_PRESENTATION_DISABLED) {
+        draw_data->FramebufferScale = ImVec2(1.0f, 1.0f);
+    }
+    ImGui_ImplSDLRenderer3_RenderDrawData(draw_data, g_renderer);
+    draw_data->FramebufferScale = framebuffer_scale;
 }
 
 void imgui_layer_set_visible(bool visible) {
