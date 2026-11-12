@@ -80,6 +80,7 @@ ArchiveHandle* cbz_open(const char *path, int *total_images, ProgressCallback pr
     handle->total_images = 0;
     handle->entry_names = NULL;
     handle->page_indices = NULL;
+    handle->listing_incomplete = false;
     // Initialize archive mutex for thread-safe access
     handle->archive_mutex = SDL_CreateMutex();
     if (!handle->archive_mutex) {

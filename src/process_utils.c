@@ -34,12 +34,6 @@ int execute_process(const char **args, bool capture_output, char **out_output)
         return -1;
     }
 
-    if (exitcode != 0)
-    {
-        SDL_free(output);
-        return exitcode;
-    }
-
     if (out_output)
     {
         *out_output = output;

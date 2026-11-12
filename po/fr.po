@@ -17,6 +17,15 @@ msgstr "Annuler"
 msgid "Close"
 msgstr "Fermer"
 
+msgid "Could not load page %d."
+msgstr "Impossible de charger la page %d."
+
+msgid "The file may be damaged or unreadable."
+msgstr "Le fichier est peut-être endommagé ou illisible."
+
+msgid "Archive could not be fully read. Pages may be missing or unreadable."
+msgstr "L'archive n'a pas pu être lue entièrement. Des pages peuvent manquer ou être illisibles."
+
 msgid "Up"
 msgstr "Dossier parent"
 

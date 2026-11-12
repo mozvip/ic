@@ -57,6 +57,8 @@ void unload_view(ImageView *view);
 typedef struct PreloadResult {
     ImageView *view;
     int generation;
+    bool failed;
+    int failed_image_index;
 } PreloadResult;
 
 typedef struct LoadViewTask {
@@ -425,6 +427,16 @@ static void set_transient_status(const char *fmt, ...) {
     viewer.gamepad_status_until = SDL_GetTicks() + 3000;
 }
 
+static void complete_preload(const PreloadResult *res) {
+    if (!res || !res->view || res->generation != SDL_GetAtomicInt(&viewer.load_generation)) return;
+    if (res->failed) {
+        res->view->load_failed = true;
+        res->view->failed_image_index = res->failed_image_index;
+    } else if (viewer.renderer) {
+        create_texture(viewer.renderer, res->view);
+    }
+}
+
 void comic_viewer_finish_loading(void) {
     if (viewer.load_thread) {
         SDL_WaitThread(viewer.load_thread, NULL);
@@ -437,10 +449,7 @@ void comic_viewer_finish_loading(void) {
                                        viewer.preload_event_type, viewer.preload_event_type)) > 0) {
             for (int i = 0; i < count; i++) {
                 PreloadResult *res = events[i].user.data1;
-                if (res && res->generation == SDL_GetAtomicInt(&viewer.load_generation) &&
-                    res->view && viewer.renderer) {
-                    create_texture(viewer.renderer, res->view);
-                }
+                complete_preload(res);
                 free(res);
             }
         }
@@ -890,6 +899,7 @@ bool comic_viewer_load(const char *path) {
     comic_viewer_finish_loading();
     initial_view_pending = false;
     pending_preload_direction = 0;
+    viewer.archive_warning_pending = false;
     comic_viewer_save_reading_position();
     if (path == NULL) return false;
 
@@ -946,6 +956,7 @@ bool comic_viewer_load(const char *path) {
     }
 
     if (result) {
+        viewer.archive_warning_pending = viewer.archive && viewer.archive->listing_incomplete;
         progress_bar_update(0.8f, "Building page views...");
         // Clear any previous status message
         viewer.status_message[0] = '\0';
@@ -1142,14 +1153,12 @@ static void handle_events(void) {
                         SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION, "Preload event: res_gen=%d, current_gen=%d", 
                                     res ? res->generation : -1, current_gen);
                         if (res && res->view && res->generation == current_gen) {
-                            SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION, "Preload valid, creating texture");
-                            ImageView *view = res->view;
+                            SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION, "Preload result is valid");
                             if (viewer.load_thread) {
                                 SDL_WaitThread(viewer.load_thread, NULL);
                                 viewer.load_thread = NULL; // Clear the thread handle
                             }
-                            // Create texture from the loaded surface
-                            create_texture(viewer.renderer, view);
+                            complete_preload(res);
                         } else if (res) {
                             SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION, "Stale preload ignored: gen=%d vs current=%d", 
                                         res->generation, current_gen);
@@ -1828,6 +1837,24 @@ static int cleanup_load_thread_resources(SDL_Surface *combined_surface) {
     return 0;
 }
 
+static void post_preload_result(ImageView *view, int generation, bool failed, int image_index) {
+    if (generation != SDL_GetAtomicInt(&viewer.load_generation)) return;
+    PreloadResult *res = malloc(sizeof(*res));
+    if (!res) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to allocate page load result");
+        return;
+    }
+    *res = (PreloadResult){view, generation, failed, image_index};
+    SDL_Event event;
+    SDL_zero(event);
+    event.type = viewer.preload_event_type;
+    event.user.data1 = res;
+    if (!SDL_PushEvent(&event)) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to post page load result: %s", SDL_GetError());
+        free(res);
+    }
+}
+
 // Thread: decode/prepare surfaces only, then post event to main thread to create texture
 static int load_view_surfaces_in_thread(void *data) {
     LoadViewTask *task = (LoadViewTask *)data;
@@ -1851,7 +1878,11 @@ static int load_view_surfaces_in_thread(void *data) {
         }
 
         int image_index = view->image_indices[i];
-        if (!prepare_image(image_index)) return -1;
+        if (!prepare_image(image_index)) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to prepare page %d", image_index + 1);
+            post_preload_result(view, generation, true, image_index);
+            return -1;
+        }
         ImageEntry *image = &viewer.images[image_index];
 
         if (!image->surface) {
@@ -1861,6 +1892,7 @@ static int load_view_surfaces_in_thread(void *data) {
                              "Failed to load image %s using backend %s",
                              image->path,
                              image_loader_backend_name(image_loader_get_active_backend()));
+                post_preload_result(view, generation, true, image_index);
                 return -1;
             }
         }
@@ -1884,6 +1916,7 @@ static int load_view_surfaces_in_thread(void *data) {
         surface = SDL_CreateSurface(total_width, max_height, surface->format);
         if (!surface) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create combined surface: %s", SDL_GetError());
+            post_preload_result(view, generation, true, -1);
             return -1;
         }
         combined_surface = surface;  // track for cleanup
@@ -1903,6 +1936,7 @@ static int load_view_surfaces_in_thread(void *data) {
             if (!SDL_BlitSurface(image->surface, NULL, surface, &dst_rect)) {
                 SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to blit image %s: %s", image->path, SDL_GetError());
                 SDL_DestroySurface(surface);
+                post_preload_result(view, generation, true, image_index);
                 return -1;
             }
 
@@ -1912,7 +1946,11 @@ static int load_view_surfaces_in_thread(void *data) {
 
     if (view->count == 1) {
         surface = SDL_DuplicateSurface(surface);
-        if (!surface) return -1;
+        if (!surface) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to duplicate page surface: %s", SDL_GetError());
+            post_preload_result(view, generation, true, view->image_indices[0]);
+            return -1;
+        }
         combined_surface = surface;
     }
 
@@ -2163,20 +2201,7 @@ static int load_view_surfaces_in_thread(void *data) {
     view->surface = surface; // transfer ownership to main thread
 
     // Post to main thread to convert surface -> texture
-    if (surface) {
-        PreloadResult *res = malloc(sizeof(PreloadResult));
-        if (res) {
-            res->view = view;
-            res->generation = generation;
-
-            SDL_Event event;
-            SDL_zero(event);
-            event.type = viewer.preload_event_type;
-            event.user.data1 = res;
-            event.user.data2 = NULL;
-            if (!SDL_PushEvent(&event)) free(res);
-        }
-    }
+    post_preload_result(view, generation, false, -1);
 
     return 0;
 }
@@ -2186,6 +2211,8 @@ static void load_view(ImageView *view) {
     if (!view) return;
     comic_viewer_finish_loading();
     if (view->texture) return; // already done
+    view->load_failed = false;
+    view->failed_image_index = -1;
     if (view->surface) {
         create_texture(viewer.renderer, view);
         return;
@@ -2196,12 +2223,15 @@ static void load_view(ImageView *view) {
     LoadViewTask *task = malloc(sizeof(LoadViewTask));
     if (!task) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to allocate load task");
+        view->load_failed = true;
         return;
     }
     task->view = view;
     task->generation = generation;
     viewer.load_thread = SDL_CreateThread(load_view_surfaces_in_thread, "load_view_thread", (void*)task);
     if (!viewer.load_thread) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to start page load thread: %s", SDL_GetError());
+        view->load_failed = true;
         free(task);
     }
 }
@@ -2285,6 +2315,8 @@ static void create_texture(SDL_Renderer *renderer, ImageView *view) {
     view->texture = SDL_CreateTextureFromSurface(renderer, view->surface);
     if (!view->texture) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create texture: %s", SDL_GetError());
+        view->load_failed = true;
+        view->failed_image_index = -1;
     } else if (initial_view_pending && view == viewer.current_view_node) {
         initial_view_pending = false;
         progress_bar_update(1.0f, "Page ready");
@@ -2394,6 +2426,8 @@ static ImageView* create_view_node_after(ImageView* prev_view) {
     view->next = NULL;
     view->prev = prev_view;
     view->texture = NULL;
+    view->load_failed = false;
+    view->failed_image_index = -1;
 
     for (int i = 0; i < MAX_IMAGES_PER_VIEW; i++) {
         view->image_indices[i] = -1;

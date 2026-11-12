@@ -5,8 +5,8 @@
 #include <stdbool.h>
 
 // Executes a process and waits for it to finish.
-// When capture_output is true, stdout is captured and returned via out_output.
-// Captured output must be released with SDL_free by the caller.
+// When capture_output is true, stdout is returned via out_output regardless of
+// the process exit code. Captured output must be released with SDL_free.
 // Returns the process exit code, or -1 if process creation/read fails.
 int execute_process(const char **args, bool capture_output, char **out_output);
 

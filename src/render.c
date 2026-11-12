@@ -10,6 +10,7 @@
 #include "file_browser.h"
 #include "overlay.h"
 #include "imgui_layer.h"
+#include "i18n.h"
 
 extern struct ViewerState viewer;
 extern ImageProcessingOptions* options;
@@ -236,12 +237,44 @@ void viewer_render_current_view(void) {
     SDL_SetRenderDrawColor(viewer.renderer, 30, 30, 30, 255);
     SDL_RenderClear(viewer.renderer);
 
+    if (viewer.archive_warning_pending && !file_browser_is_active()) {
+        const char *warning = IC_("Archive could not be fully read. Pages may be missing or unreadable.");
+        if (imgui_layer_is_initialized()) {
+            imgui_layer_set_status_message(warning);
+        } else {
+            SDL_strlcpy(viewer.gamepad_status_msg, warning, sizeof(viewer.gamepad_status_msg));
+            viewer.gamepad_status_until = SDL_GetTicks() + 5000;
+        }
+        viewer.archive_warning_pending = false;
+    }
+
     imgui_layer_new_frame();
 
     ImageView *current_display_view = viewer.current_view_node;
     if (!current_display_view || !current_display_view->texture) {
         // Page is loading or empty - show loading indicator
-        if (current_display_view && viewer.load_thread) {
+        if (current_display_view && current_display_view->load_failed) {
+            char message[128];
+            int page = current_display_view->failed_image_index >= 0
+                ? current_display_view->failed_image_index + 1 : viewer.current_view_index + 1;
+            snprintf(message, sizeof(message), IC_("Could not load page %d."), page);
+            const char *lines[] = {message, IC_("The file may be damaged or unreadable.")};
+            for (int i = 0; i < 2; i++) {
+                SDL_Texture *text = render_text_internal(lines[i], (SDL_Color){255, 200, 200, 255});
+                if (text) {
+                    float w, h;
+                    SDL_GetTextureSize(text, &w, &h);
+                    SDL_FRect dst = {(viewer.window_width - w) / 2.0f,
+                                     viewer.window_height / 2.0f + (i - 1) * (h + 8.0f), w, h};
+                    SDL_RenderTexture(viewer.renderer, text, NULL, &dst);
+                    SDL_DestroyTexture(text);
+                } else {
+                    SDL_SetRenderDrawColor(viewer.renderer, 255, 200, 200, 255);
+                    SDL_RenderDebugText(viewer.renderer, 10.0f,
+                                        viewer.window_height / 2.0f + i * 16.0f, lines[i]);
+                }
+            }
+        } else if (current_display_view && viewer.load_thread) {
             // Page is actively loading - show spinner
             int centerX = (int)((float)viewer.window_width / 2.0f);
             int centerY = (int)((float)viewer.window_height / 2.0f);

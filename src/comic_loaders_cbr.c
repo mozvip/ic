@@ -73,6 +73,7 @@ ArchiveHandle* cbr_open(const char *path, int *total_images, ProgressCallback pr
     handle->archive_ptr = NULL;  // Not needed for command-line approach
     handle->entry_names = NULL;
     handle->page_indices = NULL;
+    handle->listing_incomplete = false;
     
     if (progress_cb) {
         progress_cb(0.5f, "Analyzing archive...");
@@ -82,10 +83,15 @@ ArchiveHandle* cbr_open(const char *path, int *total_images, ProgressCallback pr
     const char *args[] = {"unrar", "lb", path, NULL};
     
     char *output = NULL;
-    if (execute_process(args, true, &output) != 0 || output == NULL) {
+    int list_result = execute_process(args, true, &output);
+    if (list_result < 0 || output == NULL) {
         fprintf(stderr, "Failed to run unrar command to list files\n");
         cbr_close(handle);
         return NULL;
+    }
+    if (list_result != 0) {
+        fprintf(stderr, "unrar reported archive errors; using readable entries\n");
+        handle->listing_incomplete = true;
     }
     
     if (progress_cb) {
@@ -207,8 +213,7 @@ bool cbr_get_image(ArchiveHandle *handle, int index, char **out_path) {
     const char *args[] = {"unrar", "x", "-o+", handle->path, entry_name, handle->temp_dir, NULL};
     
     int extract_result = execute_process(args, false, NULL);
-    
-    if (extract_result != 0) {
+    if (extract_result < 0) {
         fprintf(stderr, "Failed to extract file from RAR archive: %s\n", entry_name);       
         return false;
     }
@@ -216,8 +221,10 @@ bool cbr_get_image(ArchiveHandle *handle, int index, char **out_path) {
     // Check if the file exists after extraction
     if (access(output_path, F_OK) != 0) {
         fprintf(stderr, "File not found after extraction: %s\n", entry_name);
-        
         return false;
+    }
+    if (extract_result != 0) {
+        fprintf(stderr, "unrar reported archive errors after extracting: %s\n", entry_name);
     }
     
     *out_path = strdup(output_path);

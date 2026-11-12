@@ -26,7 +26,10 @@ typedef struct PdfBackendContext {
 static int poppler_get_page_count(const char *path) {
     const char *args[] = {"pdfinfo", path, NULL};
     char *output = NULL;
-    if (execute_process(args, true, &output) != 0 || !output) return -1;
+    if (execute_process(args, true, &output) != 0 || !output) {
+        SDL_free(output);
+        return -1;
+    }
 
     int n_pages = 0;
     char *line = strtok(output, "\n");
@@ -47,11 +50,10 @@ static bool poppler_is_available(void) {
     /* Check that pdfinfo and pdftoppm are reachable. */
     const char *args[] = {"pdfinfo", "-v", NULL};
     char *out = NULL;
-    if (execute_process(args, true, &out) == 0 && out) {
-        SDL_free(out);
-        return true;
-    }
-    return false;
+    int result = execute_process(args, true, &out);
+    bool available = result == 0 && out;
+    SDL_free(out);
+    return available;
 }
 
 /* ── open ─────────────────────────────────────────────────────────── */

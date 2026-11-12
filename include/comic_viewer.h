@@ -62,6 +62,7 @@ typedef struct ArchiveHandle {
     char **entry_names;         // Array of entry names (for CBZ/CBR)
     int *page_indices;          // Array of page indices (for PDF)
     SDL_Mutex *archive_mutex;   // Mutex to synchronize archive access across threads
+    bool listing_incomplete;    // Archive listing reported an error
 } ArchiveHandle;
 
 #define MAX_IMAGES_PER_VIEW 4
@@ -72,6 +73,8 @@ typedef struct ImageView {
     SDL_FRect crop_rect;                        // Crop rectangle for the view
     SDL_Surface *surface;                       // Combined surface for the view
     SDL_Texture *texture;                       // Loaded texture
+    bool load_failed;                           // Last load attempt failed
+    int failed_image_index;                     // Failed page, or -1 if unknown
     struct ImageView *next;                     // Pointer to next view in linked list
     struct ImageView *prev;                     // Pointer to previous view in linked list
     SDL_Color left_edge_color;                // Dominant color on the left edge
@@ -104,6 +107,7 @@ struct ViewerState {
     TTF_Font *font;           // Font for rendering text
     int monitor_index;        // Selected monitor index
     ArchiveHandle *archive;   // Handle for on-demand loading
+    bool archive_warning_pending;
     SDL_Thread *load_thread;                   // Thread for loading images
     SDL_AtomicInt load_generation;             // Generation token for active load work
 

@@ -234,6 +234,10 @@ Cropping changes the displayed view; it does not rewrite the source image.
 | Text and interface labels | A system sans-serif font discovered through Fontconfig |
 | Native controls and file chooser | GTK3 with the desktop's AT-SPI accessibility bridge |
 
+If `unrar` reports errors while listing a CBR, ic warns that pages may be missing
+or unreadable and opens the pages it can find. Listing does not verify every page;
+damage discovered during extraction is reported when that page is opened.
+
 Select the PDF renderer and rendering DPI in the `F1` settings panel. Image format
 support depends on the compiled-in decoder. Sources support up to 1,000 images;
 larger archives are rejected, and directory imports stop at that limit.

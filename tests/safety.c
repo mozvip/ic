@@ -89,7 +89,7 @@ static void test_zip(void) {
     make_archive(path, 2, "../escaped.png");
     int count = 0;
     ArchiveHandle *handle = archive_open(path, ARCHIVE_TYPE_CBZ, &count, NULL);
-    assert(handle && count == 2);
+    assert(handle && count == 2 && !handle->listing_incomplete);
     assert(rmdir(handle->temp_dir) == 0);
     char *output = NULL;
     assert(!archive_get_image(handle, 0, &output));
@@ -167,6 +167,56 @@ static void reset_comic(void) {
     viewer.image_count = 0;
     free(viewer.source_path);
     viewer.source_path = NULL;
+}
+
+static void test_cbr_listing_warning(void) {
+    char executable[PATH_MAX], archive[PATH_MAX], path_env[PATH_MAX * 2];
+    snprintf(executable, sizeof(executable), "%s/unrar", sandbox);
+    snprintf(archive, sizeof(archive), "%s/broken.cbr", sandbox);
+    const char *old_path = getenv("PATH");
+    char *saved_path = strdup(old_path ? old_path : "");
+    assert(saved_path);
+    snprintf(path_env, sizeof(path_env), "%s:%s", sandbox, saved_path);
+    FILE *f = fopen(executable, "w");
+    assert(f);
+    assert(fputs("#!/bin/sh\n"
+                 "if [ \"$1\" = lb ]; then\n"
+                 "  printf 'page.jpg\\n'\n"
+                 "  case \"$2\" in *broken.cbr) exit 3;; esac\n"
+                 "  exit 0\n"
+                 "fi\n"
+                 "exit 1\n", f) >= 0);
+    assert(fclose(f) == 0 && chmod(executable, 0700) == 0);
+    f = fopen(archive, "w");
+    assert(f && fclose(f) == 0);
+    assert(setenv("PATH", path_env, 1) == 0);
+
+    assert(comic_viewer_load(archive));
+    assert(viewer.archive && viewer.archive->listing_incomplete && viewer.archive_warning_pending);
+    assert(viewer.image_count == 1);
+    viewer_render_current_view();
+    assert(!viewer.archive_warning_pending);
+    assert(strstr(viewer.gamepad_status_msg, "Archive could not be fully read"));
+    reset_comic();
+    archive_close(viewer.archive);
+    viewer.archive = NULL;
+    viewer.gamepad_status_msg[0] = '\0';
+
+    assert(remove(archive) == 0);
+    snprintf(archive, sizeof(archive), "%s/clean.cbr", sandbox);
+    f = fopen(archive, "w");
+    assert(f && fclose(f) == 0);
+    assert(comic_viewer_load(archive));
+    assert(viewer.archive && !viewer.archive->listing_incomplete && !viewer.archive_warning_pending);
+    viewer_render_current_view();
+    assert(!viewer.gamepad_status_msg[0]);
+    reset_comic();
+    archive_close(viewer.archive);
+    viewer.archive = NULL;
+
+    assert(setenv("PATH", saved_path, 1) == 0);
+    free(saved_path);
+    assert(remove(executable) == 0 && remove(archive) == 0);
 }
 
 static void setup_comic(void) {
@@ -355,7 +405,7 @@ static void test_lifecycle(void) {
     for (int index = 0; index < 40; index++) {
         PreloadResult *result = malloc(sizeof(*result));
         assert(result);
-        *result = (PreloadResult){view, SDL_GetAtomicInt(&viewer.load_generation)};
+        *result = (PreloadResult){view, SDL_GetAtomicInt(&viewer.load_generation), false, -1};
         SDL_Event event = {0};
         event.type = viewer.preload_event_type;
         event.user.data1 = result;
@@ -424,6 +474,41 @@ static void test_navigation_loading(void) {
     comic_viewer_finish_loading();
     assert(viewer.first_view->texture);
     reset_comic();
+}
+
+static void test_page_load_failure(void) {
+    setup_comic();
+    ImageView *first = viewer.current_view_node;
+    ImageView *second = first->next;
+    char missing_path[PATH_MAX];
+    snprintf(missing_path, sizeof(missing_path), "%s/missing.bmp", sandbox);
+    free(viewer.images[1].path);
+    viewer.images[1].path = strdup(missing_path);
+    assert(viewer.images[1].path);
+
+    load_view(second);
+    Uint64 deadline = SDL_GetTicks() + 5000;
+    while (!SDL_HasEvent(viewer.preload_event_type) && SDL_GetTicks() < deadline) SDL_Delay(1);
+    assert(SDL_HasEvent(viewer.preload_event_type));
+    handle_events();
+    assert(!viewer.load_thread && first->texture && !first->load_failed);
+    assert(second->load_failed && second->failed_image_index == 1 && !second->texture);
+
+    go_to_next_view();
+    comic_viewer_finish_loading();
+    assert(viewer.current_view_node == second && second->load_failed);
+    assert(second->failed_image_index == 1);
+    viewer_render_current_view();
+
+    make_image(missing_path);
+    load_view(second);
+    comic_viewer_finish_loading();
+    assert(second->texture && !second->load_failed);
+    go_to_previous_view();
+    comic_viewer_finish_loading();
+    assert(viewer.current_view_node == first && first->texture && !first->load_failed);
+    reset_comic();
+    assert(remove(missing_path) == 0);
 }
 
 static void test_merge_and_empty_navigation(void) {
@@ -659,6 +744,7 @@ int main(void) {
     snprintf(second_path, sizeof(second_path), "%s/second.bmp", sandbox);
     test_zip();
     test_cache_cleanup();
+    test_cbr_listing_warning();
     test_directory_progress();
     test_monitors();
     test_gamma();
@@ -666,6 +752,7 @@ int main(void) {
     test_hidpi_rendering();
     test_lifecycle();
     test_navigation_loading();
+    test_page_load_failure();
     test_merge_and_empty_navigation();
     test_reading_position();
     test_state_migration();
